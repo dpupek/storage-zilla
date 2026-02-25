@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fast File IO Selection"
+  short_description: "Pick fastest file-read methods (full vs streaming)."
+  default_prompt: "Select the fastest file-read method (full or streaming) and provide recipes when appropriate."

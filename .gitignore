@@ -1,0 +1,19 @@
+# Build artifacts
+**/bin/
+**/obj/
+
+# Test/artifact folders
+.tmp/
+
+# User/local files
+*.user
+*.suo
+*.log
+
+# IDE
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

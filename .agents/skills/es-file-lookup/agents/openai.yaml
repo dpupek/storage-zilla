@@ -1,0 +1,4 @@
+interface:
+  display_name: "ES File Lookup"
+  short_description: "Use Everything CLI for file name/path lookups"
+  default_prompt: "Use es.exe for file lookups (name/path) instead of Get-ChildItem or dir."

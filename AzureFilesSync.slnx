@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AzureFilesSync.Core/AzureFilesSync.Core.csproj" />
+    <Project Path="src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj" />
+    <Project Path="src/AzureFilesSync.Infrastructure/AzureFilesSync.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AzureFilesSync.IntegrationTests/AzureFilesSync.IntegrationTests.csproj" />
+    <Project Path="tests/AzureFilesSync.Tests/AzureFilesSync.Tests.csproj" />
+    <Project Path="tests/AzureFilesSync.UITests/AzureFilesSync.UITests.csproj" />
+  </Folder>
+</Solution>

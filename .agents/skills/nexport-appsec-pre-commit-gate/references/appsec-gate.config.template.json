@@ -1,0 +1,42 @@
+{
+  "mode": "warn-only",
+  "secretScan": "staged",
+  "dependencyScan": {
+    "dotnet": true,
+    "node": true,
+    "python": true,
+    "php": true
+  },
+  "sast": {
+    "enabled": true,
+    "rulesets": [
+      "p/owasp-top-ten"
+    ],
+    "includeGlobs": [
+      "**/*.cs",
+      "**/*.js",
+      "**/*.ts",
+      "**/*.py",
+      "**/*.php"
+    ],
+    "excludeGlobs": [
+      "**/bin/**",
+      "**/obj/**",
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/vendor/**"
+    ]
+  },
+  "ciHandoff": {
+    "enabled": false,
+    "provider": "azure-devops",
+    "organization": "",
+    "project": "",
+    "pipelineId": 0,
+    "branch": "main"
+  },
+  "ignore": {
+    "advisories": [],
+    "rules": []
+  }
+}

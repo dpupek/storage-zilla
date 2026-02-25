@@ -1,0 +1,247 @@
+<Window x:Class="AzureFilesSync.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:conv="clr-namespace:AzureFilesSync.Desktop.Converters"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Azure Files Sync Client"
+        Height="760"
+        Width="1280"
+        MinHeight="600"
+        MinWidth="980">
+    <Window.Resources>
+        <conv:EntryIconConverter x:Key="EntryIconConverter" />
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="220" />
+        </Grid.RowDefinitions>
+
+        <Menu Grid.Row="0" Margin="0,0,0,8">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Sign In" Command="{Binding SignInCommand}" />
+                <MenuItem Header="Sign _Out" Command="{Binding SignOutCommand}" />
+                <Separator />
+                <MenuItem Header="_Save Profile" Command="{Binding SaveProfileCommand}" />
+                <Separator />
+                <MenuItem Header="E_xit" Command="{Binding ExitApplicationCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="_Settings" Command="{Binding OpenSettingsCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_Help" Command="{Binding OpenHelpCommand}" />
+                <MenuItem Header="_About" Command="{Binding ShowAboutCommand}" />
+            </MenuItem>
+        </Menu>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ComboBox Grid.Column="0" ItemsSource="{Binding Subscriptions}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedSubscription}" />
+            <ComboBox Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding StorageAccounts}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedStorageAccount}" />
+            <ComboBox Grid.Column="2" Margin="8,0,0,0" ItemsSource="{Binding FileShares}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedFileShare}" />
+            <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                <CheckBox VerticalAlignment="Center" Content="Include Deletes" IsChecked="{Binding IncludeDeletes}" Margin="0,0,8,0"/>
+                <Button Content="Plan Mirror" Width="110" Command="{Binding BuildMirrorPlanCommand}" Margin="0,0,8,0" />
+                <Button Content="Queue Mirror" Width="110" Command="{Binding ExecuteMirrorCommand}" />
+            </StackPanel>
+        </Grid>
+
+        <TextBlock Grid.Row="1"
+                   Margin="0,34,0,0"
+                   HorizontalAlignment="Left"
+                   Foreground="SteelBlue"
+                   FontStyle="Italic"
+                   Text="{Binding MirrorPlanStatusMessage}" />
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="50" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Column="0" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                <ComboBox Width="460" IsEditable="True" ItemsSource="{Binding RecentLocalPaths}" Text="{Binding LocalPath, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Content="Browse" Width="90" Margin="8,0,0,0" Command="{Binding BrowseLocalFolderCommand}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                <ComboBox Width="460" IsEditable="True" ItemsSource="{Binding RecentRemotePaths}" Text="{Binding RemotePath, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Content="Refresh" Width="90" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
+            </StackPanel>
+
+            <DataGrid x:Name="LocalGrid"
+                      Grid.Column="0"
+                      Grid.Row="1"
+                      ItemsSource="{Binding LocalGridEntries}"
+                      SelectedItem="{Binding SelectedLocalEntry}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      SelectionMode="Extended"
+                      Sorting="LocalGrid_Sorting"
+                      MouseDoubleClick="LocalGrid_MouseDoubleClick">
+                <DataGrid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Upload Selection (Start Now)" Click="LocalUploadStartNow_Click" />
+                        <MenuItem Header="Upload Selection (Add to Queue)" Click="LocalUploadAddToQueue_Click" />
+                        <Separator />
+                        <MenuItem Header="Show in Explorer" Click="LocalShowInExplorer_Click" />
+                        <MenuItem Header="Open" Click="LocalOpen_Click" />
+                        <MenuItem Header="Open with..." Click="LocalOpenWith_Click" />
+                        <MenuItem Header="Rename" Click="LocalRename_Click" />
+                        <MenuItem Header="Delete" Click="LocalDelete_Click" />
+                        <Separator />
+                        <MenuItem Header="Columns">
+                            <MenuItem Header="Name" IsCheckable="True" IsChecked="True" Tag="Name" Click="LocalColumnToggle_Click" />
+                            <MenuItem Header="Type" IsCheckable="True" IsChecked="True" Tag="Type" Click="LocalColumnToggle_Click" />
+                            <MenuItem Header="Size" IsCheckable="True" IsChecked="True" Tag="Size" Click="LocalColumnToggle_Click" />
+                            <MenuItem Header="Modified" IsCheckable="True" IsChecked="True" Tag="Modified" Click="LocalColumnToggle_Click" />
+                            <MenuItem Header="Date Created" IsCheckable="True" IsChecked="True" Tag="Created" Click="LocalColumnToggle_Click" />
+                            <MenuItem Header="Author" IsCheckable="True" IsChecked="True" Tag="Author" Click="LocalColumnToggle_Click" />
+                        </MenuItem>
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn x:Name="LocalNameColumn" Header="Name" Width="*" SortMemberPath="Name">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Image Width="16" Height="16" Margin="0,0,6,0" Source="{Binding Converter={StaticResource EntryIconConverter}}" />
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn x:Name="LocalTypeColumn" Header="Type" Binding="{Binding IsDirectory}" Width="90" SortMemberPath="IsDirectory" />
+                    <DataGridTextColumn x:Name="LocalSizeColumn" Header="Size" Binding="{Binding Length}" Width="120" SortMemberPath="Length" />
+                    <DataGridTextColumn x:Name="LocalModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime}" Width="180" SortMemberPath="LastWriteTime" />
+                    <DataGridTextColumn x:Name="LocalCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime}" Width="180" SortMemberPath="CreatedTime" />
+                    <DataGridTextColumn x:Name="LocalAuthorColumn" Header="Author" Binding="{Binding Author}" Width="200" SortMemberPath="Author" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <StackPanel Grid.Column="1" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <Button Content="&gt;&gt;" Width="44" Margin="0,0,0,12" ToolTip="Upload selected" Command="{Binding EnqueueUploadCommand}" />
+                <Button Content="&lt;&lt;" Width="44" ToolTip="Download selected" Command="{Binding EnqueueDownloadCommand}" />
+            </StackPanel>
+
+            <Grid Grid.Column="2" Grid.Row="1">
+                <DataGrid x:Name="RemoteGrid"
+                          ItemsSource="{Binding RemoteGridEntries}"
+                          SelectedItem="{Binding SelectedRemoteEntry}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          SelectionMode="Extended"
+                          Sorting="RemoteGrid_Sorting"
+                          MouseDoubleClick="RemoteGrid_MouseDoubleClick">
+                    <DataGrid.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Download Selection (Start Now)" Click="RemoteDownloadStartNow_Click" />
+                            <MenuItem Header="Download Selection (Add to Queue)" Click="RemoteDownloadAddToQueue_Click" />
+                            <Separator />
+                            <MenuItem Header="Rename" Click="RemoteRename_Click" />
+                            <MenuItem Header="Delete" Click="RemoteDelete_Click" />
+                            <Separator />
+                            <MenuItem Header="Columns">
+                                <MenuItem Header="Name" IsCheckable="True" IsChecked="True" Tag="Name" Click="RemoteColumnToggle_Click" />
+                                <MenuItem Header="Type" IsCheckable="True" IsChecked="True" Tag="Type" Click="RemoteColumnToggle_Click" />
+                                <MenuItem Header="Size" IsCheckable="True" IsChecked="True" Tag="Size" Click="RemoteColumnToggle_Click" />
+                                <MenuItem Header="Modified" IsCheckable="True" IsChecked="True" Tag="Modified" Click="RemoteColumnToggle_Click" />
+                                <MenuItem Header="Date Created" IsCheckable="True" IsChecked="True" Tag="Created" Click="RemoteColumnToggle_Click" />
+                                <MenuItem Header="Author" IsCheckable="True" IsChecked="True" Tag="Author" Click="RemoteColumnToggle_Click" />
+                            </MenuItem>
+                        </ContextMenu>
+                    </DataGrid.ContextMenu>
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn x:Name="RemoteNameColumn" Header="Name" Width="*" SortMemberPath="Name">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Width="16" Height="16" Margin="0,0,6,0" Source="{Binding Converter={StaticResource EntryIconConverter}}" />
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn x:Name="RemoteTypeColumn" Header="Type" Binding="{Binding IsDirectory}" Width="90" SortMemberPath="IsDirectory" />
+                        <DataGridTextColumn x:Name="RemoteSizeColumn" Header="Size" Binding="{Binding Length}" Width="120" SortMemberPath="Length" />
+                        <DataGridTextColumn x:Name="RemoteModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime}" Width="180" SortMemberPath="LastWriteTime" />
+                        <DataGridTextColumn x:Name="RemoteCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime}" Width="180" SortMemberPath="CreatedTime" />
+                        <DataGridTextColumn x:Name="RemoteAuthorColumn" Header="Author" Binding="{Binding Author}" Width="240" SortMemberPath="Author" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <Border Background="#CCFFF8E1"
+                        BorderBrush="#FFE0A300"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="12"
+                        Margin="10"
+                        VerticalAlignment="Top">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding RemotePaneStatusMessage}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <DockPanel LastChildFill="True">
+                        <TextBlock Text="!"
+                                   FontSize="20"
+                                   Margin="0,0,10,0"
+                                   VerticalAlignment="Top"
+                                   Foreground="#FF8A5A00" />
+                        <TextBlock Text="{Binding RemotePaneStatusMessage}"
+                                   TextWrapping="Wrap"
+                                   Foreground="#FF4E3A00"
+                                   VerticalAlignment="Center" />
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBlock FontWeight="SemiBold" Margin="0,0,0,8" Text="Transfer Queue" />
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                <Button Content="Pause" Width="90" Command="{Binding PauseSelectedJobCommand}" />
+                <Button Content="Resume" Width="90" Margin="8,0,0,0" Command="{Binding ResumeSelectedJobCommand}" />
+                <Button Content="Retry" Width="90" Margin="8,0,0,0" Command="{Binding RetrySelectedJobCommand}" />
+                <Button Content="Cancel" Width="90" Margin="8,0,0,0" Command="{Binding CancelSelectedJobCommand}" />
+                <Button Content="Run Queue" Width="110" Margin="8,0,0,0" Command="{Binding RunQueueCommand}" />
+            </StackPanel>
+            <DataGrid Grid.Row="2" ItemsSource="{Binding QueueItems}" SelectedItem="{Binding SelectedQueueItem}" AutoGenerateColumns="False" IsReadOnly="True">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Id" Binding="{Binding JobId}" Width="220" />
+                    <DataGridTextColumn Header="Direction" Binding="{Binding Request.Direction}" Width="100" />
+                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100" />
+                    <DataGridTextColumn Header="Progress" Binding="{Binding ProgressDisplay}" Width="180" />
+                    <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
+    </Grid>
+</Window>
