@@ -24,7 +24,7 @@
 ## Phase 5: Hardening (child-0004)
 - [x] Add transient retry handling for Azure file transfer operations.
 - [x] Add resume safety checks and integrity verification on downloads when remote hash is available.
-- [ ] Add richer error categorization.
+- [x] Add richer error categorization.
 - [ ] Add bandwidth throttling and per-job concurrency controls.
 - [ ] Add packaging and installer profile.
 
@@ -35,6 +35,17 @@
 ## Phase 6: Connection Profiles (child-0005)
 - [x] Persist subscription/account/share + local/remote paths.
 - [x] Add recent local/remote target lists in UI.
+
+## Phase 8: UX and Operations (child-0007)
+- [x] Add top application menu for sign in/sign out, save profile, settings, and help.
+- [x] Add remote capability gating and informational permission card in the right pane.
+- [x] Disable mirror actions until remote side capabilities allow planning/execution.
+- [x] Add context menus for local/remote grids with single-item operations (open/show in explorer/open with/rename/delete).
+- [x] Add per-grid column picker with sorting support.
+- [x] Add `Date Created` and `Author` columns in local and remote panes.
+- [x] Add enhanced error dialog support with copy-to-clipboard details.
+- [x] Add debug/info/error filesystem logging via Serilog.
+- [x] Publish workspace to GitHub repository `dpupek/storage-zilla`.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
