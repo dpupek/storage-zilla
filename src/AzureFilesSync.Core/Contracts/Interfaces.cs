@@ -129,3 +129,9 @@ public interface IAppUpdateService
     Task<UpdateValidationResult> ValidateDownloadedUpdateAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
     Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
 }
+
+public interface IUserHelpContentService
+{
+    IReadOnlyList<HelpTopic> GetTopics();
+    Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken);
+}

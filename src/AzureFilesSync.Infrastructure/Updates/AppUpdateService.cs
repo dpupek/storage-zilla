@@ -45,10 +45,11 @@ public sealed class AppUpdateService : IAppUpdateService
         if (release is null)
         {
             var channelLabel = _currentChannel == UpdateChannel.Beta ? "beta" : "stable";
-            return new UpdateCheckResult(currentVersion, null, false, null, $"Unable to retrieve the latest {channelLabel} release.");
+            return new UpdateCheckResult(currentVersion, null, false, null, $"Unable to retrieve the latest {channelLabel} release.", null);
         }
 
         var latestVersion = NormalizeTagToVersion(release.TagName);
+        var releasePageUrl = BuildReleasePageUrl(release.TagName, release.HtmlUrl);
         if (!TryParseVersion(currentVersion, out var current) || !TryParseVersion(latestVersion, out var latest))
         {
             return new UpdateCheckResult(
@@ -56,31 +57,38 @@ public sealed class AppUpdateService : IAppUpdateService
                 latestVersion,
                 false,
                 null,
-                "Could not compare current version to latest release.");
+                "Could not compare current version to latest release.",
+                releasePageUrl);
+        }
+
+        if (latest <= current)
+        {
+            return new UpdateCheckResult(currentVersion, latestVersion, false, null, $"You're up to date ({currentVersion}).", releasePageUrl);
         }
 
         var msixAsset = release.Assets.FirstOrDefault(x =>
             x.Name.EndsWith(_options.ReleaseAssetExtension, StringComparison.OrdinalIgnoreCase));
         var hashAsset = release.Assets.FirstOrDefault(x =>
             string.Equals(x.Name, _options.Sha256FileName, StringComparison.OrdinalIgnoreCase));
-        if (msixAsset is null || hashAsset is null)
+
+        UpdateCandidate? candidate = null;
+        var message = $"Update available: {latestVersion}";
+        if (msixAsset is not null && hashAsset is not null)
         {
-            return new UpdateCheckResult(currentVersion, latestVersion, false, null, "Latest release is missing installer assets.");
+            candidate = new UpdateCandidate(
+                latestVersion,
+                release.TagName,
+                release.PublishedAtUtc,
+                msixAsset.Name,
+                msixAsset.DownloadUrl,
+                hashAsset.DownloadUrl);
+        }
+        else
+        {
+            message = $"Update available: {latestVersion}. Installer assets were not found for in-app download.";
         }
 
-        if (latest <= current)
-        {
-            return new UpdateCheckResult(currentVersion, latestVersion, false, null, $"You're up to date ({currentVersion}).");
-        }
-
-        var candidate = new UpdateCandidate(
-            latestVersion,
-            release.TagName,
-            release.PublishedAtUtc,
-            msixAsset.Name,
-            msixAsset.DownloadUrl,
-            hashAsset.DownloadUrl);
-        return new UpdateCheckResult(currentVersion, latestVersion, true, candidate, $"Update available: {latestVersion}");
+        return new UpdateCheckResult(currentVersion, latestVersion, true, candidate, message, releasePageUrl);
     }
 
     public async Task<UpdateDownloadResult> DownloadUpdateAsync(UpdateCandidate candidate, IProgress<double>? progress, CancellationToken cancellationToken)
@@ -231,4 +239,16 @@ public sealed class AppUpdateService : IAppUpdateService
 
     private static string NormalizeTagToVersion(string tag) =>
         tag.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? tag[1..] : tag;
+
+    private string BuildReleasePageUrl(string tagName, string? htmlUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(htmlUrl) &&
+            Uri.IsWellFormedUriString(htmlUrl, UriKind.Absolute))
+        {
+            return htmlUrl;
+        }
+
+        var normalizedTag = tagName.Trim();
+        return $"https://github.com/{_options.Owner}/{_options.Repo}/releases/tag/{normalizedTag}";
+    }
 }

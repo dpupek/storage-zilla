@@ -28,3 +28,11 @@ Linked cases: child-0002
 2. Existing mirror service contracts remain in code for future re-enable.
 
 Linked cases: child-0003
+
+## Flow 4: In-App Help and User Documentation
+1. Open `Help -> Help` from the main menu.
+2. Embedded help window opens to `Overview`.
+3. Navigate guide sections from the left topic list or inline links.
+4. View workflow instructions, queue operations, control reference, and troubleshooting without leaving the app.
+
+Linked cases: child-0007

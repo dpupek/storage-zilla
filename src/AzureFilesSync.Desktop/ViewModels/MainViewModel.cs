@@ -11,6 +11,7 @@ using Microsoft.Win32;
 using Serilog;
 using System.Collections;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
@@ -42,6 +43,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IRemoteCapabilityService _remoteCapabilityService;
     private readonly IRemoteActionPolicyService _remoteActionPolicyService;
     private readonly IAppUpdateService _appUpdateService;
+    private readonly IUserHelpContentService _userHelpContentService;
 
     private MirrorPlan? _lastMirrorPlan;
     private bool _isRestoringProfile;
@@ -231,7 +233,8 @@ public partial class MainViewModel : ObservableObject
         IConnectionProfileStore connectionProfileStore,
         IRemoteCapabilityService remoteCapabilityService,
         IRemoteActionPolicyService remoteActionPolicyService,
-        IAppUpdateService appUpdateService)
+        IAppUpdateService appUpdateService,
+        IUserHelpContentService userHelpContentService)
     {
         _authenticationService = authenticationService;
         _azureDiscoveryService = azureDiscoveryService;
@@ -248,6 +251,7 @@ public partial class MainViewModel : ObservableObject
         _remoteCapabilityService = remoteCapabilityService;
         _remoteActionPolicyService = remoteActionPolicyService;
         _appUpdateService = appUpdateService;
+        _userHelpContentService = userHelpContentService;
         UpdateChannel = _appUpdateService.CurrentChannel;
 
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
@@ -560,11 +564,14 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void OpenHelp()
     {
-        MessageBox.Show(
-            "Quick Start:\n1. Sign in\n2. Choose subscription, storage account, and share\n3. Browse local and remote paths\n4. Queue uploads/downloads",
-            "Help",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        try
+        {
+            HelpWindow.Show(Application.Current?.MainWindow, _userHelpContentService);
+        }
+        catch (Exception ex)
+        {
+            ShowError("Failed to open help.", ex);
+        }
     }
 
     [RelayCommand]
@@ -588,55 +595,46 @@ public partial class MainViewModel : ObservableObject
         {
             UpdateStatusMessage = "Updates: checking...";
             var check = await _appUpdateService.CheckForUpdatesAsync(CancellationToken.None);
-            if (!check.IsUpdateAvailable || check.Candidate is null)
+            if (!check.IsUpdateAvailable)
             {
                 UpdateStatusMessage = "Updates: no update available";
                 MessageBox.Show(check.Message, "Check for Updates", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
-            var downloadPrompt = MessageBox.Show(
-                $"New version {check.Candidate.Version} is available (current: {check.CurrentVersion}).\n\nDownload now?",
+            var releaseVersion = check.LatestVersion ?? "unknown";
+            var releaseUrl = check.ReleasePageUrl;
+            var openPrompt = MessageBox.Show(
+                $"New version {releaseVersion} is available (current: {check.CurrentVersion}).\n\nOpen the GitHub release page now?",
                 "Update Available",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Information);
-            if (downloadPrompt != MessageBoxResult.Yes)
+            if (openPrompt != MessageBoxResult.Yes)
             {
                 UpdateStatusMessage = "Updates: update available";
                 return;
             }
 
-            UpdateStatusMessage = "Updates: downloading...";
-            var download = await _appUpdateService.DownloadUpdateAsync(check.Candidate, progress: null, CancellationToken.None);
-            var validation = await _appUpdateService.ValidateDownloadedUpdateAsync(download, CancellationToken.None);
-            if (!validation.IsValid)
+            if (string.IsNullOrWhiteSpace(releaseUrl))
             {
-                UpdateStatusMessage = "Updates: validation failed";
                 ErrorDialog.ShowMessage(
-                    "Update validation failed.",
-                    validation.Error ?? "The downloaded update package failed validation checks.");
+                    "Update Page Unavailable",
+                    "No release URL was provided for the latest version.");
+                UpdateStatusMessage = "Updates: failed";
                 return;
             }
 
-            var installPrompt = MessageBox.Show(
-                $"Update {check.Candidate.Version} is ready to install.\n\nThe installer will be launched and Storage Zilla will close.\n\nContinue?",
-                "Install Update",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (installPrompt != MessageBoxResult.Yes)
+            Process.Start(new ProcessStartInfo
             {
-                UpdateStatusMessage = "Updates: downloaded";
-                return;
-            }
-
-            await _appUpdateService.LaunchInstallerAsync(download, CancellationToken.None);
-            UpdateStatusMessage = "Updates: installer launched";
-            Application.Current.Shutdown();
+                FileName = releaseUrl,
+                UseShellExecute = true
+            });
+            UpdateStatusMessage = "Updates: release page opened";
         }
         catch (Exception ex)
         {
             UpdateStatusMessage = "Updates: failed";
-            ShowError("Failed to check/install update.", ex);
+            ShowError("Failed to check/open update page.", ex);
         }
     }
 

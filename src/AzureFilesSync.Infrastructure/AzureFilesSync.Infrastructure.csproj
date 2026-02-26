@@ -10,6 +10,7 @@
     <PackageReference Include="Azure.ResourceManager.Storage" Version="1.6.0" />
     <PackageReference Include="Azure.Storage.DataMovement" Version="12.3.0" />
     <PackageReference Include="Azure.Storage.Files.Shares" Version="12.25.0" />
+    <PackageReference Include="Markdig" Version="0.38.0" />
     <PackageReference Include="Polly" Version="8.6.5" />
   </ItemGroup>
 

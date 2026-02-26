@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Events;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -16,9 +17,24 @@ namespace AzureFilesSync.Desktop;
 public partial class App : Application
 {
     private IHost? _host;
+    private Mutex? _singleInstanceMutex;
+    private bool _ownsSingleInstanceMutex;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        _singleInstanceMutex = new Mutex(initiallyOwned: true, @"Global\StorageZilla.Desktop.SingleInstance", out var isNewInstance);
+        if (!isNewInstance)
+        {
+            MessageBox.Show(
+                "Storage Zilla is already running.",
+                "Storage Zilla",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+        _ownsSingleInstanceMutex = true;
+
         var logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AzureFilesSync", "logs");
         Directory.CreateDirectory(logDirectory);
         var logPath = Path.Combine(logDirectory, "desktop-.log");
@@ -65,6 +81,14 @@ public partial class App : Application
             await _host.StopAsync(TimeSpan.FromSeconds(5));
             _host.Dispose();
         }
+
+        if (_ownsSingleInstanceMutex)
+        {
+            _singleInstanceMutex?.ReleaseMutex();
+        }
+        _singleInstanceMutex?.Dispose();
+        _singleInstanceMutex = null;
+        _ownsSingleInstanceMutex = false;
 
         Log.CloseAndFlush();
         base.OnExit(e);

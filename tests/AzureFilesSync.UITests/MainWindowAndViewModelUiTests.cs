@@ -503,7 +503,8 @@ public sealed class MainWindowAndViewModelUiTests
             profileStore,
             remoteCapabilityService,
             remoteActionPolicyService,
-            appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.")));
+            appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.", null)),
+            new StubUserHelpContentService());
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
     {
@@ -808,5 +809,16 @@ public sealed class MainWindowAndViewModelUiTests
             Task.FromResult(new UpdateValidationResult(true, "CN=Danm@de Software", downloaded.Candidate.Version + ".0", null));
 
         public Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class StubUserHelpContentService : IUserHelpContentService
+    {
+        public IReadOnlyList<HelpTopic> GetTopics() =>
+        [
+            new HelpTopic("overview", "Overview", "README.md")
+        ];
+
+        public Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken) =>
+            Task.FromResult(new HelpDocument(topicId, "Overview", "# Help", "<html><body><h1>Help</h1></body></html>", "README.md"));
     }
 }

@@ -3,6 +3,7 @@ using AzureFilesSync.Core.Services;
 using AzureFilesSync.Infrastructure.Auth;
 using AzureFilesSync.Infrastructure.Azure;
 using AzureFilesSync.Infrastructure.Config;
+using AzureFilesSync.Infrastructure.Docs;
 using AzureFilesSync.Infrastructure.Local;
 using AzureFilesSync.Infrastructure.Transfers;
 using AzureFilesSync.Infrastructure.Updates;
@@ -46,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMirrorExecutionService, MirrorExecutionService>();
         services.AddSingleton<IGitHubReleaseClient, GitHubReleaseClient>();
         services.AddSingleton<IAppUpdateService, AppUpdateService>();
+        services.AddSingleton<IUserHelpContentService, FileSystemUserHelpContentService>();
 
         return services;
     }
