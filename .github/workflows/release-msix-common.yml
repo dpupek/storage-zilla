@@ -32,6 +32,8 @@ jobs:
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
 
       - name: Install NBGV
         shell: pwsh
@@ -111,6 +113,36 @@ jobs:
           $certPath = Join-Path $env:RUNNER_TEMP "storage-zilla-release.pfx"
           [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String("${{ secrets.MSIX_CERT_BASE64 }}"))
           "MSIX_CERT_PATH=$certPath" >> $env:GITHUB_ENV
+
+      - name: Validate signing certificate
+        shell: pwsh
+        run: |
+          $certPassword = "${{ secrets.MSIX_CERT_PASSWORD }}"
+          if ([string]::IsNullOrWhiteSpace($certPassword)) {
+            throw "MSIX_CERT_PASSWORD is empty."
+          }
+
+          if (-not (Test-Path $env:MSIX_CERT_PATH)) {
+            throw "Signing certificate file was not created: $env:MSIX_CERT_PATH"
+          }
+
+          try {
+            $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+            $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($env:MSIX_CERT_PATH, $certPassword, $flags)
+
+            if (-not $cert.HasPrivateKey) {
+              throw "PFX loaded but does not contain a private key."
+            }
+
+            if ($cert.NotAfter -lt (Get-Date)) {
+              throw "PFX certificate is expired as of $($cert.NotAfter.ToString('u'))."
+            }
+
+            Write-Host "Signing certificate validated. Subject: $($cert.Subject); Thumbprint: $($cert.Thumbprint)"
+            $cert.Dispose()
+          } catch {
+            throw "Unable to open MSIX signing certificate. Verify MSIX_CERT_BASE64 and MSIX_CERT_PASSWORD were created from the same PFX export. Details: $($_.Exception.Message)"
+          }
 
       - name: Apply package publisher from secret
         shell: pwsh
