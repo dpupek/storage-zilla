@@ -18,9 +18,9 @@
     <Icon Id="AppIcon.ico" SourceFile="src\AzureFilesSync.Desktop\Assets\Branding\app.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-    <Property Id="WixUILicenseRtf" Value="installer\StorageZilla.Msi\Eula.rtf" />
-    <Property Id="WixUIDialogBmp" Value="installer\StorageZilla.Msi\Assets\WixUIDialog.bmp" />
-    <Property Id="WixUIBannerBmp" Value="installer\StorageZilla.Msi\Assets\WixUIBanner.bmp" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.InstallerRoot)\Eula.rtf" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.InstallerRoot)\Assets\WixUIDialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.InstallerRoot)\Assets\WixUIBanner.bmp" />
     <UIRef Id="WixUI_InstallDir" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
