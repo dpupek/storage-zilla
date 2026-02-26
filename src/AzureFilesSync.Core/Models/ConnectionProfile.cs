@@ -20,11 +20,29 @@ public sealed record ConnectionProfile(
     string LocalPath,
     string RemotePath,
     bool IncludeDeletes,
+    int TransferMaxConcurrency,
+    int TransferMaxBytesPerSecond,
+    TransferConflictPolicy UploadConflictDefaultPolicy,
+    TransferConflictPolicy DownloadConflictDefaultPolicy,
     IReadOnlyList<string> RecentLocalPaths,
     IReadOnlyList<string> RecentRemotePaths,
     GridLayoutProfile? LocalGridLayout = null,
     GridLayoutProfile? RemoteGridLayout = null)
 {
     public static ConnectionProfile Empty(string defaultLocalPath) =>
-        new(null, null, null, defaultLocalPath, string.Empty, false, [defaultLocalPath], [], null, null);
+        new(
+            null,
+            null,
+            null,
+            defaultLocalPath,
+            string.Empty,
+            false,
+            4,
+            0,
+            TransferConflictPolicy.Ask,
+            TransferConflictPolicy.Ask,
+            [defaultLocalPath],
+            [],
+            null,
+            null);
 }

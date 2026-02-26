@@ -215,6 +215,74 @@ public partial class MainWindow : Window
         await vm.OpenRemoteEntryAsync(RemoteGrid.SelectedItem as RemoteEntry);
     }
 
+    private async void LocalPathCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        var selectedPath = combo.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return;
+        }
+
+        vm.LocalPath = selectedPath;
+        await vm.LoadLocalDirectoryCommand.ExecuteAsync(null);
+    }
+
+    private async void RemotePathCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        var selectedPath = combo.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return;
+        }
+
+        vm.RemotePathDisplay = selectedPath;
+        await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+    }
+
+    private async void LocalPathCombo_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        vm.LocalPath = combo.Text;
+        await vm.LoadLocalDirectoryCommand.ExecuteAsync(null);
+    }
+
+    private async void RemotePathCombo_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        vm.RemotePathDisplay = combo.Text;
+        await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+    }
+
+    private void QueueGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        vm.UpdateSelectedQueueSelection(QueueGrid.SelectedItems);
+    }
+
     private async void LocalColumnToggle_Click(object sender, RoutedEventArgs e)
     {
         ToggleColumnVisibility(sender, GetLocalColumnMap());

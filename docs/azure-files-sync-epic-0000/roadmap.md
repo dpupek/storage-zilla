@@ -25,7 +25,7 @@
 - [x] Add transient retry handling for Azure file transfer operations.
 - [x] Add resume safety checks and integrity verification on downloads when remote hash is available.
 - [x] Add richer error categorization.
-- [ ] Add bandwidth throttling and per-job concurrency controls.
+- [x] Add bandwidth throttling and per-job concurrency controls.
 - [ ] Add packaging and installer profile.
 
 ## Phase 7: Live Integration Coverage (child-0006)
@@ -46,6 +46,25 @@
 - [x] Add enhanced error dialog support with copy-to-clipboard details.
 - [x] Add debug/info/error filesystem logging via Serilog.
 - [x] Publish workspace to GitHub repository `dpupek/storage-zilla`.
+- [x] Stabilize remote selection during async metadata enrichment.
+- [x] Replace boolean file type display with `Parent`/`Folder`/`File`.
+- [x] Format file sizes as human-readable units.
+- [x] Display modified/created timestamps in local time.
+- [x] Add compact status bar with sign-in state, throttle, and concurrency.
+- [x] Add labels above subscription/storage account/file share selectors.
+- [x] Prevent duplicate active queue items for the same transfer identity (direction + source + destination).
+- [x] Add queue status/direction filters with `Show All` reset.
+- [x] Enable horizontal scrolling for local and remote file grids.
+- [x] Alphabetically sort subscription, storage account, and file share selectors.
+- [x] Add explicit conflict policies (`Ask`, `Skip`, `Overwrite`, `Rename`) for upload/download queueing.
+- [x] Add transfer conflict settings for upload/download defaults and persist them in connection profile.
+- [x] Add pre-queue conflict prompt with batch-scoped `Do for all` handling and `Cancel Batch`.
+- [x] Store effective conflict decision on queued request and surface conflict policy in queue grid.
+- [x] Add runtime safety: unresolved `Ask` conflict at execution cancels item with explanatory message.
+- [x] Fix worker-claim race so single `Run Queue` drains queued items reliably.
+- [x] Correct queue progress display for zero-byte completed transfers (`100% (0/0)`).
+- [x] Relabel queue columns to explicit `Local` and `Remote` paths.
+- [x] Temporarily hide mirror planning/execution controls pending dedicated mirror conflict UX.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.

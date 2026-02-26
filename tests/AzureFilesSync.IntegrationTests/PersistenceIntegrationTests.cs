@@ -26,6 +26,10 @@ public sealed class PersistenceIntegrationTests : IDisposable
             @"C:\work",
             "project/src",
             true,
+            6,
+            5242880,
+            TransferConflictPolicy.Ask,
+            TransferConflictPolicy.Overwrite,
             [@"C:\work", @"D:\dev"],
             ["project/src", "project/bin"]);
         #endregion
@@ -47,6 +51,10 @@ public sealed class PersistenceIntegrationTests : IDisposable
         Assert.Equal(expected.LocalPath, actual.LocalPath);
         Assert.Equal(expected.RemotePath, actual.RemotePath);
         Assert.Equal(expected.IncludeDeletes, actual.IncludeDeletes);
+        Assert.Equal(expected.TransferMaxConcurrency, actual.TransferMaxConcurrency);
+        Assert.Equal(expected.TransferMaxBytesPerSecond, actual.TransferMaxBytesPerSecond);
+        Assert.Equal(expected.UploadConflictDefaultPolicy, actual.UploadConflictDefaultPolicy);
+        Assert.Equal(expected.DownloadConflictDefaultPolicy, actual.DownloadConflictDefaultPolicy);
         Assert.Equal(expected.RecentLocalPaths, actual.RecentLocalPaths);
         Assert.Equal(expected.RecentRemotePaths, actual.RecentRemotePaths);
         #endregion

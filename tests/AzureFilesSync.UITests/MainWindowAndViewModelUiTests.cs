@@ -3,6 +3,8 @@ using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
 using AzureFilesSync.Desktop.Models;
 using AzureFilesSync.Desktop.ViewModels;
+using System.Collections;
+using System.IO;
 using Xunit;
 
 namespace AzureFilesSync.UITests;
@@ -22,13 +24,15 @@ public sealed class MainWindowAndViewModelUiTests
             100,
             null,
             0);
+        var snapshot2 = snapshot with { JobId = Guid.NewGuid() };
 
         viewModel.QueueItems.Add(new QueueItemView { Snapshot = snapshot });
-        viewModel.SelectedQueueItem = viewModel.QueueItems[0];
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = snapshot2 });
+        viewModel.UpdateSelectedQueueSelection(new ArrayList { viewModel.QueueItems[0], viewModel.QueueItems[1] });
         #endregion
 
         #region Initial Assert
-        Assert.NotNull(viewModel.SelectedQueueItem);
+        Assert.Equal(2, viewModel.SelectedQueueCount);
         #endregion
 
         #region Act
@@ -40,9 +44,13 @@ public sealed class MainWindowAndViewModelUiTests
 
         #region Assert
         Assert.Contains(snapshot.JobId, queue.PausedJobIds);
+        Assert.Contains(snapshot2.JobId, queue.PausedJobIds);
         Assert.Contains(snapshot.JobId, queue.ResumedJobIds);
+        Assert.Contains(snapshot2.JobId, queue.ResumedJobIds);
         Assert.Contains(snapshot.JobId, queue.RetriedJobIds);
+        Assert.Contains(snapshot2.JobId, queue.RetriedJobIds);
         Assert.Contains(snapshot.JobId, queue.CanceledJobIds);
+        Assert.Contains(snapshot2.JobId, queue.CanceledJobIds);
         #endregion
     }
 
@@ -124,16 +132,252 @@ public sealed class MainWindowAndViewModelUiTests
         #endregion
     }
 
-    private static MainViewModel CreateViewModel(IRemoteCapabilityService remoteCapabilityService, out SpyTransferQueueService queue)
+    [Fact]
+    public async Task MainViewModel_EnqueueUpload_UsesConfiguredTransferTuning()
     {
-        queue = new SpyTransferQueueService();
-        return new MainViewModel(
+        #region Arrange
+        var viewModel = CreateViewModel(out var queue);
+        SetValidRemoteSelection(viewModel);
+        viewModel.TransferMaxConcurrency = 7;
+        viewModel.TransferMaxBytesPerSecond = 1048576;
+        viewModel.SelectedLocalEntry = new LocalEntry("local.txt", @"C:\work\local.txt", false, 10, DateTimeOffset.UtcNow);
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.EnqueueUploadCommand.CanExecute(null));
+        #endregion
+
+        #region Act
+        await viewModel.EnqueueUploadCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        var request = Assert.Single(queue.EnqueuedRequests);
+        Assert.Equal(7, request.MaxConcurrency);
+        Assert.Equal(1048576, request.MaxBytesPerSecond);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_PauseAllQueue_CallsTransferQueueService()
+    {
+        #region Arrange
+        var viewModel = CreateViewModel(out var queue);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(0, queue.PauseAllCount);
+        #endregion
+
+        #region Act
+        await viewModel.PauseAllQueueCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(1, queue.PauseAllCount);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_QueueLocalSelection_ConflictWithDefaultSkip_DoesNotEnqueue()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
             new StubRemoteFileOperationsService(),
+            new AlwaysConflictProbeService(),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.UploadConflictDefaultPolicy = TransferConflictPolicy.Skip;
+        var selected = new ArrayList
+        {
+            new LocalEntry("file.txt", @"C:\work\file.txt", false, 10, DateTimeOffset.UtcNow)
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+
+        #region Act
+        await viewModel.QueueLocalSelectionAsync(selected, startImmediately: true);
+        #endregion
+
+        #region Assert
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_QueueLocalSelection_ConflictWithDefaultOverwrite_Enqueues()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new AlwaysConflictProbeService(),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.UploadConflictDefaultPolicy = TransferConflictPolicy.Overwrite;
+        var selected = new ArrayList
+        {
+            new LocalEntry("file.txt", @"C:\work\file.txt", false, 10, DateTimeOffset.UtcNow)
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+
+        #region Act
+        await viewModel.QueueLocalSelectionAsync(selected, startImmediately: true);
+        #endregion
+
+        #region Assert
+        var request = Assert.Single(queue.EnqueuedRequests);
+        Assert.Equal(TransferConflictPolicy.Overwrite, request.ConflictPolicy);
+        #endregion
+    }
+
+    [Fact]
+    public void QueueItemView_CompletedZeroByteTransfer_ShowsHundredPercent()
+    {
+        #region Arrange
+        var snapshot = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(TransferDirection.Download, @"C:\work\zero.txt", new SharePath("storage", "share", "zero.txt")),
+            TransferJobStatus.Completed,
+            0,
+            0,
+            "Completed",
+            0);
+        var view = new QueueItemView { Snapshot = snapshot };
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(TransferJobStatus.Completed, view.Status);
+        #endregion
+
+        #region Act
+        var progress = view.ProgressDisplay;
+        #endregion
+
+        #region Assert
+        Assert.Equal("100% (0/0)", progress);
+        #endregion
+    }
+
+    [Fact]
+    public void MainViewModel_QueueFilters_FilterAndReset()
+    {
+        #region Arrange
+        var viewModel = CreateViewModel(out _);
+        var queuedUpload = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(TransferDirection.Upload, @"C:\work\queued.txt", new SharePath("storage", "share", "queued.txt")),
+            TransferJobStatus.Queued,
+            0,
+            100,
+            null,
+            0);
+        var failedDownload = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(TransferDirection.Download, @"C:\work\failed.txt", new SharePath("storage", "share", "failed.txt")),
+            TransferJobStatus.Failed,
+            0,
+            100,
+            "failed",
+            1);
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = queuedUpload });
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = failedDownload });
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(2, viewModel.QueueItemsView.Cast<object>().Count());
+        #endregion
+
+        #region Act
+        viewModel.SelectedQueueStatusFilter = nameof(TransferJobStatus.Queued);
+        viewModel.SelectedQueueDirectionFilter = nameof(TransferDirection.Upload);
+        var filteredCount = viewModel.QueueItemsView.Cast<object>().Count();
+        viewModel.ShowAllQueueFiltersCommand.Execute(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(1, filteredCount);
+        Assert.Equal("All", viewModel.SelectedQueueStatusFilter);
+        Assert.Equal("All", viewModel.SelectedQueueDirectionFilter);
+        Assert.Equal(2, viewModel.QueueItemsView.Cast<object>().Count());
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignIn_SortsSelectorsAlphabetically()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new UnsortedDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(viewModel.Subscriptions);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(["A Subscription", "M Subscription", "Z Subscription"], viewModel.Subscriptions.Select(x => x.Name).ToArray());
+        Assert.Equal(["aaccount", "maccount", "zaccount"], viewModel.StorageAccounts.Select(x => x.Name).ToArray());
+        Assert.Equal(["ashare", "mshare", "zshare"], viewModel.FileShares.Select(x => x.Name).ToArray());
+        #endregion
+    }
+
+    private static MainViewModel CreateViewModel(IRemoteCapabilityService remoteCapabilityService, out SpyTransferQueueService queue)
+    {
+        queue = new SpyTransferQueueService();
+        return CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
             queue,
             new StubMirrorPlannerService(),
             new StubMirrorExecutionService(),
@@ -144,6 +388,35 @@ public sealed class MainWindowAndViewModelUiTests
 
     private static MainViewModel CreateViewModel(out SpyTransferQueueService queue) =>
         CreateViewModel(new StubRemoteCapabilityService(), out queue);
+
+    private static MainViewModel CreateViewModelWithDependencies(
+        IAuthenticationService authenticationService,
+        IAzureDiscoveryService discoveryService,
+        ILocalBrowserService localBrowserService,
+        IAzureFilesBrowserService azureBrowserService,
+        ILocalFileOperationsService localFileOperationsService,
+        IRemoteFileOperationsService remoteFileOperationsService,
+        ITransferConflictProbeService transferConflictProbeService,
+        SpyTransferQueueService queue,
+        IMirrorPlannerService mirrorPlannerService,
+        IMirrorExecutionService mirrorExecutionService,
+        IConnectionProfileStore profileStore,
+        IRemoteCapabilityService remoteCapabilityService,
+        IRemoteActionPolicyService remoteActionPolicyService) =>
+        new(
+            authenticationService,
+            discoveryService,
+            localBrowserService,
+            azureBrowserService,
+            localFileOperationsService,
+            remoteFileOperationsService,
+            transferConflictProbeService,
+            queue,
+            mirrorPlannerService,
+            mirrorExecutionService,
+            profileStore,
+            remoteCapabilityService,
+            remoteActionPolicyService);
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
     {
@@ -159,13 +432,20 @@ public sealed class MainWindowAndViewModelUiTests
         public List<Guid> ResumedJobIds { get; } = [];
         public List<Guid> RetriedJobIds { get; } = [];
         public List<Guid> CanceledJobIds { get; } = [];
+        public List<TransferRequest> EnqueuedRequests { get; } = [];
+        public int PauseAllCount { get; private set; }
 
         public Guid Enqueue(TransferRequest request, bool startImmediately = true)
         {
+            return EnqueueOrGetExisting(request, startImmediately).JobId;
+        }
+
+        public EnqueueResult EnqueueOrGetExisting(TransferRequest request, bool startImmediately = true)
+        {
             var id = Guid.NewGuid();
-            var status = startImmediately ? TransferJobStatus.Queued : TransferJobStatus.Paused;
-            JobUpdated?.Invoke(this, new TransferJobSnapshot(id, request, status, 0, 0, null, 0));
-            return id;
+            _ = JobUpdated;
+            EnqueuedRequests.Add(request);
+            return new EnqueueResult(id, AddedNew: true, TransferJobStatus.Queued);
         }
 
         public Task PauseAsync(Guid jobId, CancellationToken cancellationToken)
@@ -181,6 +461,12 @@ public sealed class MainWindowAndViewModelUiTests
         }
 
         public Task RunQueuedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task PauseAllAsync(CancellationToken cancellationToken)
+        {
+            PauseAllCount++;
+            return Task.CompletedTask;
+        }
 
         public Task RetryAsync(Guid jobId, CancellationToken cancellationToken)
         {
@@ -225,6 +511,33 @@ public sealed class MainWindowAndViewModelUiTests
         }
     }
 
+    private sealed class UnsortedDiscoveryService : IAzureDiscoveryService
+    {
+        public async IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new SubscriptionItem("sub-z", "Z Subscription");
+            yield return new SubscriptionItem("sub-a", "A Subscription");
+            yield return new SubscriptionItem("sub-m", "M Subscription");
+        }
+
+        public async IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new StorageAccountItem(subscriptionId, "zaccount", "rg-z");
+            yield return new StorageAccountItem(subscriptionId, "aaccount", "rg-a");
+            yield return new StorageAccountItem(subscriptionId, "maccount", "rg-m");
+        }
+
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new FileShareItem("zshare");
+            yield return new FileShareItem("ashare");
+            yield return new FileShareItem("mshare");
+        }
+    }
+
     private sealed class StubLocalBrowserService : ILocalBrowserService
     {
         public Task<IReadOnlyList<LocalEntry>> ListDirectoryAsync(string path, CancellationToken cancellationToken) =>
@@ -262,6 +575,24 @@ public sealed class MainWindowAndViewModelUiTests
     {
         public Task<MirrorPlan> BuildPlanAsync(MirrorSpec spec, CancellationToken cancellationToken) =>
             Task.FromResult(new MirrorPlan([]));
+    }
+
+    private sealed class StubTransferConflictProbeService : ITransferConflictProbeService
+    {
+        public Task<bool> HasConflictAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task<(string LocalPath, SharePath RemotePath)> ResolveRenameTargetAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken) =>
+            Task.FromResult((localPath, remotePath));
+    }
+
+    private sealed class AlwaysConflictProbeService : ITransferConflictProbeService
+    {
+        public Task<bool> HasConflictAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken) =>
+            Task.FromResult(true);
+
+        public Task<(string LocalPath, SharePath RemotePath)> ResolveRenameTargetAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken) =>
+            Task.FromResult(($"{Path.GetFileNameWithoutExtension(localPath)} (1){Path.GetExtension(localPath)}", remotePath));
     }
 
     private sealed class StubMirrorExecutionService : IMirrorExecutionService

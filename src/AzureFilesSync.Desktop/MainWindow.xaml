@@ -12,6 +12,9 @@
         MinWidth="980">
     <Window.Resources>
         <conv:EntryIconConverter x:Key="EntryIconConverter" />
+        <conv:EntryTypeConverter x:Key="EntryTypeConverter" />
+        <conv:EntrySizeConverter x:Key="EntrySizeConverter" />
+        <conv:LocalDateTimeConverter x:Key="LocalDateTimeConverter" />
     </Window.Resources>
     <Grid Margin="12">
         <Grid.RowDefinitions>
@@ -19,6 +22,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="220" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Menu Grid.Row="0" Margin="0,0,0,8">
@@ -40,6 +44,10 @@
         </Menu>
 
         <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="220" />
                 <ColumnDefinition Width="220" />
@@ -47,22 +55,20 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <ComboBox Grid.Column="0" ItemsSource="{Binding Subscriptions}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedSubscription}" />
-            <ComboBox Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding StorageAccounts}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedStorageAccount}" />
-            <ComboBox Grid.Column="2" Margin="8,0,0,0" ItemsSource="{Binding FileShares}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedFileShare}" />
-            <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                <CheckBox VerticalAlignment="Center" Content="Include Deletes" IsChecked="{Binding IncludeDeletes}" Margin="0,0,8,0"/>
-                <Button Content="Plan Mirror" Width="110" Command="{Binding BuildMirrorPlanCommand}" Margin="0,0,8,0" />
-                <Button Content="Queue Mirror" Width="110" Command="{Binding ExecuteMirrorCommand}" />
-            </StackPanel>
-        </Grid>
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Subscription" FontWeight="SemiBold" Margin="0,0,0,4" />
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="Storage Account" FontWeight="SemiBold" Margin="8,0,0,4" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="File Share" FontWeight="SemiBold" Margin="8,0,0,4" />
 
-        <TextBlock Grid.Row="1"
-                   Margin="0,34,0,0"
-                   HorizontalAlignment="Left"
-                   Foreground="SteelBlue"
-                   FontStyle="Italic"
-                   Text="{Binding MirrorPlanStatusMessage}" />
+            <ComboBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Subscriptions}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedSubscription}" />
+            <ComboBox Grid.Row="1" Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding StorageAccounts}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedStorageAccount}" />
+            <ComboBox Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" ItemsSource="{Binding FileShares}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedFileShare}" />
+            <TextBlock Grid.Row="1"
+                       Grid.Column="3"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       Foreground="DimGray"
+                       Text="Mirror planning is temporarily unavailable." />
+        </Grid>
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
@@ -72,27 +78,44 @@
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Column="0" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox Width="460" IsEditable="True" ItemsSource="{Binding RecentLocalPaths}" Text="{Binding LocalPath, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Grid.Column="0" Grid.Row="0" Text="Local" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock Grid.Column="2" Grid.Row="0" Text="Remote" FontWeight="SemiBold" Margin="0,0,0,6" />
+
+            <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                <ComboBox x:Name="LocalPathCombo"
+                          Width="460"
+                          IsEditable="True"
+                          ItemsSource="{Binding RecentLocalPaths}"
+                          Text="{Binding LocalPath, UpdateSourceTrigger=PropertyChanged}"
+                          SelectionChanged="LocalPathCombo_SelectionChanged"
+                          KeyDown="LocalPathCombo_KeyDown" />
                 <Button Content="Browse" Width="90" Margin="8,0,0,0" Command="{Binding BrowseLocalFolderCommand}" />
             </StackPanel>
 
-            <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox Width="460" IsEditable="True" ItemsSource="{Binding RecentRemotePaths}" Text="{Binding RemotePath, UpdateSourceTrigger=PropertyChanged}" />
+            <StackPanel Grid.Column="2" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                <ComboBox x:Name="RemotePathCombo"
+                          Width="460"
+                          IsEditable="True"
+                          ItemsSource="{Binding RecentRemotePaths}"
+                          Text="{Binding RemotePathDisplay, UpdateSourceTrigger=PropertyChanged}"
+                          SelectionChanged="RemotePathCombo_SelectionChanged"
+                          KeyDown="RemotePathCombo_KeyDown" />
                 <Button Content="Refresh" Width="90" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
             </StackPanel>
 
             <DataGrid x:Name="LocalGrid"
                       Grid.Column="0"
-                      Grid.Row="1"
+                      Grid.Row="2"
                       ItemsSource="{Binding LocalGridEntries}"
                       SelectedItem="{Binding SelectedLocalEntry}"
                       AutoGenerateColumns="False"
                       IsReadOnly="True"
                       SelectionMode="Extended"
+                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                       Sorting="LocalGrid_Sorting"
                       MouseDoubleClick="LocalGrid_MouseDoubleClick">
                 <DataGrid.ContextMenu>
@@ -117,7 +140,7 @@
                     </ContextMenu>
                 </DataGrid.ContextMenu>
                 <DataGrid.Columns>
-                    <DataGridTemplateColumn x:Name="LocalNameColumn" Header="Name" Width="*" SortMemberPath="Name">
+                    <DataGridTemplateColumn x:Name="LocalNameColumn" Header="Name" Width="360" MinWidth="260" SortMemberPath="Name">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
@@ -127,26 +150,27 @@
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTextColumn x:Name="LocalTypeColumn" Header="Type" Binding="{Binding IsDirectory}" Width="90" SortMemberPath="IsDirectory" />
-                    <DataGridTextColumn x:Name="LocalSizeColumn" Header="Size" Binding="{Binding Length}" Width="120" SortMemberPath="Length" />
-                    <DataGridTextColumn x:Name="LocalModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime}" Width="180" SortMemberPath="LastWriteTime" />
-                    <DataGridTextColumn x:Name="LocalCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime}" Width="180" SortMemberPath="CreatedTime" />
-                    <DataGridTextColumn x:Name="LocalAuthorColumn" Header="Author" Binding="{Binding Author}" Width="200" SortMemberPath="Author" />
+                    <DataGridTextColumn x:Name="LocalTypeColumn" Header="Type" Binding="{Binding Converter={StaticResource EntryTypeConverter}}" Width="90" SortMemberPath="IsDirectory" />
+                    <DataGridTextColumn x:Name="LocalSizeColumn" Header="Size" Binding="{Binding Converter={StaticResource EntrySizeConverter}}" Width="120" SortMemberPath="Length" />
+                    <DataGridTextColumn x:Name="LocalModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="LastWriteTime" />
+                    <DataGridTextColumn x:Name="LocalCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="CreatedTime" />
+                    <DataGridTextColumn x:Name="LocalAuthorColumn" Header="Author" Binding="{Binding Author}" Width="280" MinWidth="200" SortMemberPath="Author" />
                 </DataGrid.Columns>
             </DataGrid>
 
-            <StackPanel Grid.Column="1" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel Grid.Column="1" Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center">
                 <Button Content="&gt;&gt;" Width="44" Margin="0,0,0,12" ToolTip="Upload selected" Command="{Binding EnqueueUploadCommand}" />
                 <Button Content="&lt;&lt;" Width="44" ToolTip="Download selected" Command="{Binding EnqueueDownloadCommand}" />
             </StackPanel>
 
-            <Grid Grid.Column="2" Grid.Row="1">
+            <Grid Grid.Column="2" Grid.Row="2">
                 <DataGrid x:Name="RemoteGrid"
                           ItemsSource="{Binding RemoteGridEntries}"
                           SelectedItem="{Binding SelectedRemoteEntry}"
                           AutoGenerateColumns="False"
                           IsReadOnly="True"
                           SelectionMode="Extended"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                           Sorting="RemoteGrid_Sorting"
                           MouseDoubleClick="RemoteGrid_MouseDoubleClick">
                     <DataGrid.ContextMenu>
@@ -168,7 +192,7 @@
                         </ContextMenu>
                     </DataGrid.ContextMenu>
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn x:Name="RemoteNameColumn" Header="Name" Width="*" SortMemberPath="Name">
+                        <DataGridTemplateColumn x:Name="RemoteNameColumn" Header="Name" Width="360" MinWidth="260" SortMemberPath="Name">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal">
@@ -178,11 +202,11 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn x:Name="RemoteTypeColumn" Header="Type" Binding="{Binding IsDirectory}" Width="90" SortMemberPath="IsDirectory" />
-                        <DataGridTextColumn x:Name="RemoteSizeColumn" Header="Size" Binding="{Binding Length}" Width="120" SortMemberPath="Length" />
-                        <DataGridTextColumn x:Name="RemoteModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime}" Width="180" SortMemberPath="LastWriteTime" />
-                        <DataGridTextColumn x:Name="RemoteCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime}" Width="180" SortMemberPath="CreatedTime" />
-                        <DataGridTextColumn x:Name="RemoteAuthorColumn" Header="Author" Binding="{Binding Author}" Width="240" SortMemberPath="Author" />
+                        <DataGridTextColumn x:Name="RemoteTypeColumn" Header="Type" Binding="{Binding Converter={StaticResource EntryTypeConverter}}" Width="90" SortMemberPath="IsDirectory" />
+                        <DataGridTextColumn x:Name="RemoteSizeColumn" Header="Size" Binding="{Binding Converter={StaticResource EntrySizeConverter}}" Width="120" SortMemberPath="Length" />
+                        <DataGridTextColumn x:Name="RemoteModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="LastWriteTime" />
+                        <DataGridTextColumn x:Name="RemoteCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="CreatedTime" />
+                        <DataGridTextColumn x:Name="RemoteAuthorColumn" Header="Author" Binding="{Binding Author}" Width="300" MinWidth="220" SortMemberPath="Author" />
                     </DataGrid.Columns>
                 </DataGrid>
 
@@ -226,22 +250,81 @@
             </Grid.RowDefinitions>
 
             <TextBlock FontWeight="SemiBold" Margin="0,0,0,8" Text="Transfer Queue" />
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                <Button Content="Pause" Width="90" Command="{Binding PauseSelectedJobCommand}" />
-                <Button Content="Resume" Width="90" Margin="8,0,0,0" Command="{Binding ResumeSelectedJobCommand}" />
-                <Button Content="Retry" Width="90" Margin="8,0,0,0" Command="{Binding RetrySelectedJobCommand}" />
-                <Button Content="Cancel" Width="90" Margin="8,0,0,0" Command="{Binding CancelSelectedJobCommand}" />
-                <Button Content="Run Queue" Width="110" Margin="8,0,0,0" Command="{Binding RunQueueCommand}" />
-            </StackPanel>
-            <DataGrid Grid.Row="2" ItemsSource="{Binding QueueItems}" SelectedItem="{Binding SelectedQueueItem}" AutoGenerateColumns="False" IsReadOnly="True">
+            <Grid Grid.Row="1" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBlock Text="Status" VerticalAlignment="Center" />
+                    <ComboBox Width="130"
+                              Margin="8,0,0,0"
+                              ItemsSource="{Binding QueueStatusFilterOptions}"
+                              SelectedItem="{Binding SelectedQueueStatusFilter}" />
+                    <TextBlock Text="Direction" VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <ComboBox Width="130"
+                              Margin="8,0,0,0"
+                              ItemsSource="{Binding QueueDirectionFilterOptions}"
+                              SelectedItem="{Binding SelectedQueueDirectionFilter}" />
+                    <Button Content="Show All" Margin="10,0,10,0" Padding="8,0" Command="{Binding ShowAllQueueFiltersCommand}" />
+
+                    <Button Width="36" Height="30" ToolTip="Pause selected" Command="{Binding PauseSelectedJobCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Resume selected" Command="{Binding ResumeSelectedJobCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Retry selected" Command="{Binding RetrySelectedJobCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE72C;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Cancel selected" Command="{Binding CancelSelectedJobCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE711;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" Foreground="DimGray" Text="{Binding SelectedQueueCountText}" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Width="36" Height="30" ToolTip="Pause all queue jobs" Command="{Binding PauseAllQueueCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Run queued jobs" Command="{Binding RunQueueCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+            <DataGrid Grid.Row="2"
+                      x:Name="QueueGrid"
+                      ItemsSource="{Binding QueueItemsView}"
+                      SelectedItem="{Binding SelectedQueueItem}"
+                      SelectionMode="Extended"
+                      SelectionChanged="QueueGrid_SelectionChanged"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Id" Binding="{Binding JobId}" Width="220" />
+                    <DataGridTextColumn Header="Local" Binding="{Binding LocalPathDisplay}" Width="2*" />
+                    <DataGridTextColumn Header="Remote" Binding="{Binding RemotePathDisplay}" Width="2*" />
                     <DataGridTextColumn Header="Direction" Binding="{Binding Request.Direction}" Width="100" />
+                    <DataGridTextColumn Header="Conflict" Binding="{Binding ConflictPolicyDisplay}" Width="260" />
                     <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100" />
                     <DataGridTextColumn Header="Progress" Binding="{Binding ProgressDisplay}" Width="180" />
                     <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
                 </DataGrid.Columns>
             </DataGrid>
         </Grid>
+
+        <StatusBar Grid.Row="4" Margin="0,8,0,0">
+            <StatusBarItem>
+                <TextBlock Text="{Binding LoginStatus}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusThrottleText}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusConcurrencyText}" />
+            </StatusBarItem>
+        </StatusBar>
     </Grid>
 </Window>

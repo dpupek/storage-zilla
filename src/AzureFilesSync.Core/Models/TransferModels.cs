@@ -6,6 +6,14 @@ public enum TransferDirection
     Download
 }
 
+public enum TransferConflictPolicy
+{
+    Ask,
+    Skip,
+    Overwrite,
+    Rename
+}
+
 public enum TransferJobStatus
 {
     Queued,
@@ -20,9 +28,14 @@ public sealed record TransferRequest(
     TransferDirection Direction,
     string LocalPath,
     SharePath RemotePath,
+    TransferConflictPolicy ConflictPolicy = TransferConflictPolicy.Ask,
+    string? ConflictNote = null,
     bool IsDirectory = false,
     int MaxConcurrency = 4,
-    int ChunkSizeBytes = 4 * 1024 * 1024);
+    int ChunkSizeBytes = 4 * 1024 * 1024,
+    int MaxBytesPerSecond = 0);
+
+public sealed record EnqueueResult(Guid JobId, bool AddedNew, TransferJobStatus ExistingStatus);
 
 public sealed record TransferProgress(long BytesTransferred, long TotalBytes);
 

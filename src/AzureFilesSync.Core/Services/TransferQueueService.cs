@@ -6,12 +6,14 @@ namespace AzureFilesSync.Core.Services;
 
 public sealed class TransferQueueService : ITransferQueueService
 {
+    private static readonly TransferJobStatus[] ActiveStatuses = [TransferJobStatus.Queued, TransferJobStatus.Running, TransferJobStatus.Paused];
     private readonly ITransferExecutor _executor;
     private readonly ICheckpointStore _checkpointStore;
     private readonly ConcurrentDictionary<Guid, TransferJobState> _jobs = new();
     private readonly SemaphoreSlim _workerSignal = new(0);
     private readonly CancellationTokenSource _cts = new();
     private readonly int _workerCount;
+    private readonly Lock _enqueueLock = new();
 
     public event EventHandler<TransferJobSnapshot>? JobUpdated;
 
@@ -27,19 +29,38 @@ public sealed class TransferQueueService : ITransferQueueService
         }
     }
 
+    public EnqueueResult EnqueueOrGetExisting(TransferRequest request, bool startImmediately = true)
+    {
+        lock (_enqueueLock)
+        {
+            var transferKey = BuildTransferKey(request);
+            var existing = _jobs.Values.FirstOrDefault(state =>
+                ActiveStatuses.Contains(state.Snapshot.Status) &&
+                string.Equals(BuildTransferKey(state.Snapshot.Request), transferKey, StringComparison.OrdinalIgnoreCase));
+
+            if (existing is not null)
+            {
+                return new EnqueueResult(existing.Snapshot.JobId, AddedNew: false, existing.Snapshot.Status);
+            }
+
+            var jobId = Guid.NewGuid();
+            var initialStatus = startImmediately ? TransferJobStatus.Queued : TransferJobStatus.Paused;
+            var message = startImmediately ? null : "Queued (waiting to start)";
+            var snapshot = new TransferJobSnapshot(jobId, request, initialStatus, 0, 0, message, 0);
+            _jobs[jobId] = new TransferJobState(snapshot) { HoldUntilStarted = !startImmediately };
+            Publish(snapshot);
+            if (startImmediately)
+            {
+                _workerSignal.Release();
+            }
+
+            return new EnqueueResult(jobId, AddedNew: true, initialStatus);
+        }
+    }
+
     public Guid Enqueue(TransferRequest request, bool startImmediately = true)
     {
-        var jobId = Guid.NewGuid();
-        var initialStatus = startImmediately ? TransferJobStatus.Queued : TransferJobStatus.Paused;
-        var message = startImmediately ? null : "Queued (waiting to start)";
-        var snapshot = new TransferJobSnapshot(jobId, request, initialStatus, 0, 0, message, 0);
-        _jobs[jobId] = new TransferJobState(snapshot) { HoldUntilStarted = !startImmediately };
-        Publish(snapshot);
-        if (startImmediately)
-        {
-            _workerSignal.Release();
-        }
-        return jobId;
+        return EnqueueOrGetExisting(request, startImmediately).JobId;
     }
 
     public async Task PauseAsync(Guid jobId, CancellationToken cancellationToken)
@@ -108,16 +129,20 @@ public sealed class TransferQueueService : ITransferQueueService
             await state.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (!state.HoldUntilStarted || state.Snapshot.Status != TransferJobStatus.Paused)
+                if (state.Snapshot.Status == TransferJobStatus.Paused)
                 {
+                    state.HoldUntilStarted = false;
+                    state.PauseRequested = false;
+                    state.Snapshot = state.Snapshot with { Status = TransferJobStatus.Queued, Message = "Queued" };
+                    Publish(state.Snapshot);
+                    released++;
                     continue;
                 }
 
-                state.HoldUntilStarted = false;
-                state.PauseRequested = false;
-                state.Snapshot = state.Snapshot with { Status = TransferJobStatus.Queued, Message = "Queued" };
-                Publish(state.Snapshot);
-                released++;
+                if (state.Snapshot.Status == TransferJobStatus.Queued)
+                {
+                    released++;
+                }
             }
             finally
             {
@@ -128,6 +153,35 @@ public sealed class TransferQueueService : ITransferQueueService
         for (var i = 0; i < released; i++)
         {
             _workerSignal.Release();
+        }
+    }
+
+    public async Task PauseAllAsync(CancellationToken cancellationToken)
+    {
+        foreach (var state in _jobs.Values)
+        {
+            await state.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (state.Snapshot.Status == TransferJobStatus.Queued)
+                {
+                    state.Snapshot = state.Snapshot with { Status = TransferJobStatus.Paused, Message = "Paused" };
+                    Publish(state.Snapshot);
+                    continue;
+                }
+
+                if (state.Snapshot.Status != TransferJobStatus.Running)
+                {
+                    continue;
+                }
+
+                state.PauseRequested = true;
+                state.JobCancellation?.Cancel();
+            }
+            finally
+            {
+                state.Lock.Release();
+            }
         }
     }
 
@@ -186,22 +240,15 @@ public sealed class TransferQueueService : ITransferQueueService
         while (!cancellationToken.IsCancellationRequested)
         {
             await _workerSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
-            var next = _jobs.Values.FirstOrDefault(x => x.Snapshot.Status == TransferJobStatus.Queued);
-            if (next is null)
+            if (!TryClaimNextQueued(out var next))
             {
                 continue;
             }
 
-            await next.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
             TransferJobSnapshot runningSnapshot;
             CancellationToken transferCancellation;
             try
             {
-                if (next.Snapshot.Status != TransferJobStatus.Queued)
-                {
-                    continue;
-                }
-
                 next.JobCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 next.PauseRequested = false;
                 transferCancellation = next.JobCancellation.Token;
@@ -258,7 +305,12 @@ public sealed class TransferQueueService : ITransferQueueService
             }
             catch (Exception ex)
             {
-                next.Snapshot = runningSnapshot with { Status = TransferJobStatus.Failed, Message = ex.Message };
+                var isUnresolvedAskConflict = ex.Message.Contains("Ask policy was unresolved", StringComparison.OrdinalIgnoreCase);
+                next.Snapshot = runningSnapshot with
+                {
+                    Status = isUnresolvedAskConflict ? TransferJobStatus.Canceled : TransferJobStatus.Failed,
+                    Message = ex.Message
+                };
                 Publish(next.Snapshot);
             }
             finally
@@ -277,7 +329,49 @@ public sealed class TransferQueueService : ITransferQueueService
         }
     }
 
+    private bool TryClaimNextQueued(out TransferJobState next)
+    {
+        foreach (var state in _jobs.Values)
+        {
+            if (!state.Lock.Wait(0))
+            {
+                continue;
+            }
+
+            if (state.Snapshot.Status == TransferJobStatus.Queued)
+            {
+                next = state;
+                return true;
+            }
+
+            state.Lock.Release();
+        }
+
+        next = null!;
+        return false;
+    }
+
     private void Publish(TransferJobSnapshot snapshot) => JobUpdated?.Invoke(this, snapshot);
+
+    private static string BuildTransferKey(TransferRequest request)
+    {
+        var localPath = NormalizeLocalPath(request.LocalPath);
+        var account = (request.RemotePath.StorageAccountName ?? string.Empty).Trim().ToLowerInvariant();
+        var share = (request.RemotePath.ShareName ?? string.Empty).Trim().ToLowerInvariant();
+        var remoteRelative = request.RemotePath.NormalizeRelativePath().ToLowerInvariant();
+        return $"{request.Direction}|{localPath}|{account}|{share}|{remoteRelative}";
+    }
+
+    private static string NormalizeLocalPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = path.Trim().Replace('/', '\\');
+        return normalized.TrimEnd('\\').ToLowerInvariant();
+    }
 
     private sealed class TransferJobState
     {

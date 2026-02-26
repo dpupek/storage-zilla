@@ -55,6 +55,12 @@ public interface ITransferExecutor
         CancellationToken cancellationToken);
 }
 
+public interface ITransferConflictProbeService
+{
+    Task<bool> HasConflictAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken);
+    Task<(string LocalPath, SharePath RemotePath)> ResolveRenameTargetAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken);
+}
+
 public interface ICheckpointStore
 {
     Task<TransferCheckpoint?> LoadAsync(Guid jobId, CancellationToken cancellationToken);
@@ -65,10 +71,12 @@ public interface ICheckpointStore
 public interface ITransferQueueService
 {
     event EventHandler<TransferJobSnapshot>? JobUpdated;
+    EnqueueResult EnqueueOrGetExisting(TransferRequest request, bool startImmediately = true);
     Guid Enqueue(TransferRequest request, bool startImmediately = true);
     Task PauseAsync(Guid jobId, CancellationToken cancellationToken);
     Task ResumeAsync(Guid jobId, CancellationToken cancellationToken);
     Task RunQueuedAsync(CancellationToken cancellationToken);
+    Task PauseAllAsync(CancellationToken cancellationToken);
     Task RetryAsync(Guid jobId, CancellationToken cancellationToken);
     Task CancelAsync(Guid jobId, CancellationToken cancellationToken);
     IReadOnlyList<TransferJobSnapshot> Snapshot();

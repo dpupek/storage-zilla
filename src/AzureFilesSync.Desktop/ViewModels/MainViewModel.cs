@@ -9,20 +9,30 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using Serilog;
 using System.Collections;
+using System.ComponentModel;
 using System.IO;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Data;
 
 namespace AzureFilesSync.Desktop.ViewModels;
 
 public partial class MainViewModel : ObservableObject
 {
+    private const int DefaultTransferConcurrency = 4;
+    private const int MinTransferConcurrency = 1;
+    private const int MaxTransferConcurrency = 32;
+    private const int MinTransferMaxBytesPerSecond = 0;
+    private const int MaxTransferMaxBytesPerSecond = 1024 * 1024 * 1024;
+    private const string QueueFilterAll = "All";
+
     private readonly IAuthenticationService _authenticationService;
     private readonly IAzureDiscoveryService _azureDiscoveryService;
     private readonly ILocalBrowserService _localBrowserService;
     private readonly IAzureFilesBrowserService _azureFilesBrowserService;
     private readonly ILocalFileOperationsService _localFileOperationsService;
     private readonly IRemoteFileOperationsService _remoteFileOperationsService;
+    private readonly ITransferConflictProbeService _transferConflictProbeService;
     private readonly ITransferQueueService _transferQueueService;
     private readonly IMirrorPlannerService _mirrorPlanner;
     private readonly IMirrorExecutionService _mirrorExecution;
@@ -33,9 +43,13 @@ public partial class MainViewModel : ObservableObject
     private MirrorPlan? _lastMirrorPlan;
     private bool _isRestoringProfile;
     private bool _suppressSelectionHandlers;
+    private bool _isUpdatingRemoteSelection;
     private CancellationTokenSource _selectionCts = new();
     private DateTimeOffset _lastLocalRefreshUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastRemoteRefreshUtc = DateTimeOffset.MinValue;
+    private string _lastSuccessfulLocalPath = NormalizeLocalPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    private readonly Lock _remoteEnrichmentLock = new();
+    private readonly HashSet<string> _remoteEnrichmentInFlight = [];
 
     public ObservableCollection<SubscriptionItem> Subscriptions { get; } = [];
     public ObservableCollection<StorageAccountItem> StorageAccounts { get; } = [];
@@ -45,8 +59,26 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<LocalEntry> LocalGridEntries { get; } = [];
     public ObservableCollection<RemoteEntry> RemoteGridEntries { get; } = [];
     public ObservableCollection<QueueItemView> QueueItems { get; } = [];
+    public ObservableCollection<Guid> SelectedQueueJobIds { get; } = [];
     public ObservableCollection<string> RecentLocalPaths { get; } = [];
     public ObservableCollection<string> RecentRemotePaths { get; } = [];
+    public ObservableCollection<string> QueueStatusFilterOptions { get; } =
+    [
+        QueueFilterAll,
+        nameof(TransferJobStatus.Queued),
+        nameof(TransferJobStatus.Running),
+        nameof(TransferJobStatus.Paused),
+        nameof(TransferJobStatus.Completed),
+        nameof(TransferJobStatus.Failed),
+        nameof(TransferJobStatus.Canceled)
+    ];
+    public ObservableCollection<string> QueueDirectionFilterOptions { get; } =
+    [
+        QueueFilterAll,
+        nameof(TransferDirection.Upload),
+        nameof(TransferDirection.Download)
+    ];
+    public ICollectionView QueueItemsView { get; }
 
     [ObservableProperty]
     private string _loginStatus = "Not signed in";
@@ -65,6 +97,51 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _includeDeletes;
+
+    [ObservableProperty]
+    private int _transferMaxConcurrency = DefaultTransferConcurrency;
+
+    [ObservableProperty]
+    private int _transferMaxBytesPerSecond;
+
+    [ObservableProperty]
+    private TransferConflictPolicy _uploadConflictDefaultPolicy = TransferConflictPolicy.Ask;
+
+    [ObservableProperty]
+    private TransferConflictPolicy _downloadConflictDefaultPolicy = TransferConflictPolicy.Ask;
+
+    public int TransferMaxKilobytesPerSecond
+    {
+        get => TransferMaxBytesPerSecond <= 0 ? 0 : Math.Max(1, TransferMaxBytesPerSecond / 1024);
+        set
+        {
+            var normalizedKb = Math.Max(0, value);
+            var bytesPerSecond = normalizedKb <= 0
+                ? 0
+                : NormalizeTransferMaxBytesPerSecond((int)Math.Min((long)normalizedKb * 1024, int.MaxValue));
+            TransferMaxBytesPerSecond = bytesPerSecond;
+        }
+    }
+
+    public string StatusThrottleText =>
+        TransferMaxKilobytesPerSecond <= 0
+            ? "Throttle: Unlimited"
+            : $"Throttle: {TransferMaxKilobytesPerSecond:N0} KB/s";
+
+    public string StatusConcurrencyText => $"Concurrency: {TransferMaxConcurrency}";
+
+    public string RemotePathDisplay
+    {
+        get => string.IsNullOrWhiteSpace(RemotePath) ? @"\" : RemotePath;
+        set
+        {
+            var normalized = NormalizeRemotePathDisplay(value);
+            if (!string.Equals(RemotePath, normalized, StringComparison.Ordinal))
+            {
+                RemotePath = normalized;
+            }
+        }
+    }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(BuildMirrorPlanCommand))]
@@ -112,6 +189,15 @@ public partial class MainViewModel : ObservableObject
     private QueueItemView? _selectedQueueItem;
 
     [ObservableProperty]
+    private int _selectedQueueCount;
+
+    [ObservableProperty]
+    private string _selectedQueueStatusFilter = QueueFilterAll;
+
+    [ObservableProperty]
+    private string _selectedQueueDirectionFilter = QueueFilterAll;
+
+    [ObservableProperty]
     private GridLayoutProfile? _localGridLayout;
 
     [ObservableProperty]
@@ -124,6 +210,7 @@ public partial class MainViewModel : ObservableObject
         IAzureFilesBrowserService azureFilesBrowserService,
         ILocalFileOperationsService localFileOperationsService,
         IRemoteFileOperationsService remoteFileOperationsService,
+        ITransferConflictProbeService transferConflictProbeService,
         ITransferQueueService transferQueueService,
         IMirrorPlannerService mirrorPlanner,
         IMirrorExecutionService mirrorExecution,
@@ -137,6 +224,7 @@ public partial class MainViewModel : ObservableObject
         _azureFilesBrowserService = azureFilesBrowserService;
         _localFileOperationsService = localFileOperationsService;
         _remoteFileOperationsService = remoteFileOperationsService;
+        _transferConflictProbeService = transferConflictProbeService;
         _transferQueueService = transferQueueService;
         _mirrorPlanner = mirrorPlanner;
         _mirrorExecution = mirrorExecution;
@@ -144,6 +232,8 @@ public partial class MainViewModel : ObservableObject
         _remoteCapabilityService = remoteCapabilityService;
         _remoteActionPolicyService = remoteActionPolicyService;
 
+        QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
+        QueueItemsView.Filter = ShouldIncludeQueueItem;
         _transferQueueService.JobUpdated += OnJobUpdated;
         _ = LoadLocalProfileDefaultsAsync();
     }
@@ -158,11 +248,13 @@ public partial class MainViewModel : ObservableObject
             LoginStatus = $"Signed in as {session.DisplayName}";
             Log.Information("Sign-in completed for {DisplayName}", session.DisplayName);
 
-            Subscriptions.Clear();
+            var subscriptions = new List<SubscriptionItem>();
             await foreach (var subscription in _azureDiscoveryService.ListSubscriptionsAsync(CancellationToken.None))
             {
-                Subscriptions.Add(subscription);
+                subscriptions.Add(subscription);
             }
+
+            ReplaceSortedCollection(Subscriptions, subscriptions, x => x.Name);
             Log.Debug("Loaded {SubscriptionCount} subscriptions.", Subscriptions.Count);
 
             await ApplyProfileSelectionsAsync();
@@ -177,23 +269,41 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task LoadLocalDirectoryAsync()
     {
+        var previousPath = _lastSuccessfulLocalPath;
+        var requestedPath = NormalizeLocalPath(LocalPath);
+
         try
         {
-            LocalPath = NormalizeLocalPath(LocalPath);
-            Log.Debug("Loading local directory: {LocalPath}", LocalPath);
+            Log.Debug("Loading local directory: {LocalPath}", requestedPath);
+            var loadedEntries = await _localBrowserService.ListDirectoryAsync(requestedPath, CancellationToken.None);
+
             LocalEntries.Clear();
-            foreach (var item in await _localBrowserService.ListDirectoryAsync(LocalPath, CancellationToken.None))
+            foreach (var item in loadedEntries)
             {
                 LocalEntries.Add(item);
             }
-            RefreshLocalGridEntries();
-            Log.Debug("Loaded {EntryCount} local entries from {LocalPath}", LocalEntries.Count, LocalPath);
 
-            AddRecentPath(RecentLocalPaths, LocalPath);
+            LocalPath = requestedPath;
+            _lastSuccessfulLocalPath = requestedPath;
+            RefreshLocalGridEntries();
+            Log.Debug("Loaded {EntryCount} local entries from {LocalPath}", LocalEntries.Count, requestedPath);
+
+            AddRecentPath(RecentLocalPaths, requestedPath);
             await PersistProfileAsync();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            LocalPath = previousPath;
+            Log.Warning(ex, "Access denied while loading local directory {LocalPath}", requestedPath);
+            MessageBox.Show(
+                $"Access denied for '{requestedPath}'. Choose a folder you can read, or run with elevated permissions.",
+                "Local Folder Access Denied",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
+            LocalPath = previousPath;
             ShowError("Failed to load local directory.", ex);
         }
     }
@@ -292,8 +402,12 @@ public partial class MainViewModel : ObservableObject
         var remoteRelative = string.IsNullOrWhiteSpace(RemotePath)
             ? SelectedLocalEntry.Name
             : $"{RemotePath.Trim('/')}/{SelectedLocalEntry.Name}";
-        var request = new TransferRequest(TransferDirection.Upload, SelectedLocalEntry.FullPath, new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative));
-        _transferQueueService.Enqueue(request, startImmediately: true);
+        var request = CreateTransferRequest(
+            TransferDirection.Upload,
+            SelectedLocalEntry.FullPath,
+            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+            UploadConflictDefaultPolicy);
+        await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
         await PersistProfileAsync();
     }
 
@@ -308,59 +422,57 @@ public partial class MainViewModel : ObservableObject
         var normalizedLocalPath = NormalizeLocalPath(LocalPath);
         LocalPath = normalizedLocalPath;
         var localTarget = Path.Combine(normalizedLocalPath, SelectedRemoteEntry.Name);
-        var request = new TransferRequest(TransferDirection.Download, localTarget, new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, SelectedRemoteEntry.FullPath));
-        _transferQueueService.Enqueue(request, startImmediately: true);
+        var request = CreateTransferRequest(
+            TransferDirection.Download,
+            localTarget,
+            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, SelectedRemoteEntry.FullPath),
+            DownloadConflictDefaultPolicy);
+        await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
         await PersistProfileAsync();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanActOnSelectedQueueItems))]
     private async Task PauseSelectedJobAsync()
     {
-        if (SelectedQueueItem is null)
-        {
-            return;
-        }
-
-        await _transferQueueService.PauseAsync(SelectedQueueItem.JobId, CancellationToken.None);
+        await ApplyToSelectedQueueJobsAsync((jobId, token) => _transferQueueService.PauseAsync(jobId, token));
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanActOnSelectedQueueItems))]
     private async Task ResumeSelectedJobAsync()
     {
-        if (SelectedQueueItem is null)
-        {
-            return;
-        }
-
-        await _transferQueueService.ResumeAsync(SelectedQueueItem.JobId, CancellationToken.None);
+        await ApplyToSelectedQueueJobsAsync((jobId, token) => _transferQueueService.ResumeAsync(jobId, token));
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanActOnSelectedQueueItems))]
     private async Task RetrySelectedJobAsync()
     {
-        if (SelectedQueueItem is null)
-        {
-            return;
-        }
-
-        await _transferQueueService.RetryAsync(SelectedQueueItem.JobId, CancellationToken.None);
+        await ApplyToSelectedQueueJobsAsync((jobId, token) => _transferQueueService.RetryAsync(jobId, token));
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanActOnSelectedQueueItems))]
     private async Task CancelSelectedJobAsync()
     {
-        if (SelectedQueueItem is null)
-        {
-            return;
-        }
-
-        await _transferQueueService.CancelAsync(SelectedQueueItem.JobId, CancellationToken.None);
+        await ApplyToSelectedQueueJobsAsync((jobId, token) => _transferQueueService.CancelAsync(jobId, token));
     }
 
     [RelayCommand]
     private async Task RunQueueAsync()
     {
         await _transferQueueService.RunQueuedAsync(CancellationToken.None);
+    }
+
+    [RelayCommand]
+    private async Task PauseAllQueueAsync()
+    {
+        await _transferQueueService.PauseAllAsync(CancellationToken.None);
+    }
+
+    [RelayCommand]
+    private void ShowAllQueueFilters()
+    {
+        SelectedQueueStatusFilter = QueueFilterAll;
+        SelectedQueueDirectionFilter = QueueFilterAll;
+        QueueItemsView.Refresh();
     }
 
     [RelayCommand]
@@ -396,18 +508,37 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void OpenSettings()
     {
-        MessageBox.Show(
-            "Settings UI is not implemented yet.\n\nFor now, use the main window controls and Save Profile.",
-            "Settings",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        var owner = Application.Current?.MainWindow;
+        if (owner is null)
+        {
+            return;
+        }
+
+        if (!TransferSettingsWindow.TryShow(
+                owner,
+                TransferMaxConcurrency,
+                TransferMaxKilobytesPerSecond,
+                UploadConflictDefaultPolicy,
+                DownloadConflictDefaultPolicy,
+                out var newConcurrency,
+                out var newThrottleKb,
+                out var uploadConflictPolicy,
+                out var downloadConflictPolicy))
+        {
+            return;
+        }
+
+        TransferMaxConcurrency = newConcurrency;
+        TransferMaxKilobytesPerSecond = newThrottleKb;
+        UploadConflictDefaultPolicy = uploadConflictPolicy;
+        DownloadConflictDefaultPolicy = downloadConflictPolicy;
     }
 
     [RelayCommand]
     private void OpenHelp()
     {
         MessageBox.Show(
-            "Quick Start:\n1. Sign in\n2. Choose subscription, storage account, and share\n3. Browse local and remote paths\n4. Queue uploads/downloads or use mirror planning",
+            "Quick Start:\n1. Sign in\n2. Choose subscription, storage account, and share\n3. Browse local and remote paths\n4. Queue uploads/downloads",
             "Help",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
@@ -548,12 +679,20 @@ public partial class MainViewModel : ObservableObject
         _lastMirrorPlan = null;
         ExecuteMirrorCommand.NotifyCanExecuteChanged();
 
-        if (value is null || _isRestoringProfile)
+        if (value is null || _isRestoringProfile || _suppressSelectionHandlers)
         {
             return;
         }
 
-        _ = PersistProfileAsync();
+        StartSelectionChangeLoad(
+            async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                await LoadRemoteDirectoryAsync();
+                token.ThrowIfCancellationRequested();
+                await PersistProfileAsync();
+            },
+            "Failed to load remote directory for selected file share.");
     }
 
     partial void OnSelectedLocalEntryChanged(LocalEntry? value)
@@ -568,7 +707,7 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedRemoteEntryChanged(RemoteEntry? value)
     {
-        if (value is null || value.Name == ".." || SelectedStorageAccount is null || SelectedFileShare is null)
+        if (_isUpdatingRemoteSelection || value is null || value.Name == ".." || SelectedStorageAccount is null || SelectedFileShare is null)
         {
             return;
         }
@@ -630,15 +769,17 @@ public partial class MainViewModel : ObservableObject
     private async Task LoadStorageAccountsAsync(SubscriptionItem subscription, CancellationToken cancellationToken)
     {
         Log.Debug("Loading storage accounts for subscription {SubscriptionId}", subscription.Id);
-        StorageAccounts.Clear();
+        var storageAccounts = new List<StorageAccountItem>();
         await foreach (var account in _azureDiscoveryService.ListStorageAccountsAsync(subscription.Id, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!string.IsNullOrWhiteSpace(account.Name))
             {
-                StorageAccounts.Add(account);
+                storageAccounts.Add(account);
             }
         }
+
+        ReplaceSortedCollection(StorageAccounts, storageAccounts, x => x.Name);
 
         if (SelectedStorageAccount is null || StorageAccounts.All(x => x.Name != SelectedStorageAccount.Name))
         {
@@ -651,7 +792,7 @@ public partial class MainViewModel : ObservableObject
     private async Task LoadFileSharesAsync(StorageAccountItem account, CancellationToken cancellationToken)
     {
         Log.Debug("Loading file shares for storage account {StorageAccountName}", account.Name);
-        FileShares.Clear();
+        var fileShares = new List<FileShareItem>();
         try
         {
             await foreach (var share in _azureDiscoveryService.ListFileSharesAsync(account.Name, cancellationToken))
@@ -659,7 +800,7 @@ public partial class MainViewModel : ObservableObject
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!string.IsNullOrWhiteSpace(share.Name))
                 {
-                    FileShares.Add(share);
+                    fileShares.Add(share);
                 }
             }
         }
@@ -684,6 +825,8 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        ReplaceSortedCollection(FileShares, fileShares, x => x.Name);
+
         if (SelectedFileShare is null || FileShares.All(x => x.Name != SelectedFileShare.Name))
         {
             SetSelectionSilently(() => SelectedFileShare = FileShares.FirstOrDefault());
@@ -704,6 +847,10 @@ public partial class MainViewModel : ObservableObject
             LocalPath = NormalizeLocalPath(profile.LocalPath);
             RemotePath = profile.RemotePath;
             IncludeDeletes = profile.IncludeDeletes;
+            TransferMaxConcurrency = NormalizeTransferConcurrency(profile.TransferMaxConcurrency);
+            TransferMaxBytesPerSecond = NormalizeTransferMaxBytesPerSecond(profile.TransferMaxBytesPerSecond);
+            UploadConflictDefaultPolicy = NormalizeConflictPolicy(profile.UploadConflictDefaultPolicy);
+            DownloadConflictDefaultPolicy = NormalizeConflictPolicy(profile.DownloadConflictDefaultPolicy);
             LocalGridLayout = profile.LocalGridLayout;
             RemoteGridLayout = profile.RemoteGridLayout;
             ReplaceCollection(RecentLocalPaths, profile.RecentLocalPaths, includeIfEmpty: LocalPath);
@@ -775,6 +922,10 @@ public partial class MainViewModel : ObservableObject
             NormalizeLocalPath(LocalPath),
             RemotePath,
             IncludeDeletes,
+            TransferMaxConcurrency,
+            TransferMaxBytesPerSecond,
+            UploadConflictDefaultPolicy,
+            DownloadConflictDefaultPolicy,
             RecentLocalPaths.ToList(),
             RecentRemotePaths.ToList(),
             LocalGridLayout,
@@ -796,6 +947,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        var requests = new List<TransferRequest>();
         foreach (var entry in selected)
         {
             if (entry.IsDirectory)
@@ -805,24 +957,25 @@ public partial class MainViewModel : ObservableObject
                 {
                     var relative = Path.GetRelativePath(entry.FullPath, filePath).Replace('\\', '/');
                     var remoteRelative = CombineRemotePath(remotePrefix, relative);
-                    var request = new TransferRequest(
+                    requests.Add(CreateTransferRequest(
                         TransferDirection.Upload,
                         filePath,
-                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative));
-                    _transferQueueService.Enqueue(request, startImmediately);
+                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+                        UploadConflictDefaultPolicy));
                 }
             }
             else
             {
                 var remoteRelative = CombineRemotePath(RemotePath, entry.Name);
-                var request = new TransferRequest(
+                requests.Add(CreateTransferRequest(
                     TransferDirection.Upload,
                     entry.FullPath,
-                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative));
-                _transferQueueService.Enqueue(request, startImmediately);
+                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+                    UploadConflictDefaultPolicy));
             }
         }
 
+        await ResolveAndEnqueueBatchAsync(requests, startImmediately);
         await PersistProfileAsync();
     }
 
@@ -839,6 +992,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        var requests = new List<TransferRequest>();
         foreach (var entry in selected)
         {
             if (entry.IsDirectory)
@@ -848,24 +1002,25 @@ public partial class MainViewModel : ObservableObject
                 {
                     var relativeUnderFolder = file.FullPath[entry.FullPath.Length..].TrimStart('/');
                     var localTarget = Path.Combine(LocalPath, entry.Name, relativeUnderFolder.Replace('/', Path.DirectorySeparatorChar));
-                    var request = new TransferRequest(
+                    requests.Add(CreateTransferRequest(
                         TransferDirection.Download,
                         localTarget,
-                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, file.FullPath));
-                    _transferQueueService.Enqueue(request, startImmediately);
+                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, file.FullPath),
+                        DownloadConflictDefaultPolicy));
                 }
             }
             else
             {
                 var localTarget = Path.Combine(LocalPath, entry.Name);
-                var request = new TransferRequest(
+                requests.Add(CreateTransferRequest(
                     TransferDirection.Download,
                     localTarget,
-                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath));
-                _transferQueueService.Enqueue(request, startImmediately);
+                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
+                    DownloadConflictDefaultPolicy));
             }
         }
 
+        await ResolveAndEnqueueBatchAsync(requests, startImmediately);
         await PersistProfileAsync();
     }
 
@@ -1013,6 +1168,18 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    private static void ReplaceSortedCollection<TItem>(
+        ObservableCollection<TItem> target,
+        IEnumerable<TItem> values,
+        Func<TItem, string> orderBy)
+    {
+        target.Clear();
+        foreach (var item in values.OrderBy(orderBy, StringComparer.CurrentCultureIgnoreCase))
+        {
+            target.Add(item);
+        }
+    }
+
     private void OnJobUpdated(object? sender, TransferJobSnapshot e)
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -1114,10 +1281,143 @@ public partial class MainViewModel : ObservableObject
         return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     }
 
+    private static string NormalizeRemotePathDisplay(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed is @"\" or "/")
+        {
+            return string.Empty;
+        }
+
+        return trimmed.Replace('\\', '/').Trim('/');
+    }
+
     private bool CanBuildMirrorPlan() => BuildRemotePolicy().CanPlanMirror;
     private bool CanExecuteMirror() => BuildRemotePolicy().CanExecuteMirror;
     private bool CanEnqueueUpload() => BuildRemotePolicy().CanEnqueueUpload;
     private bool CanEnqueueDownload() => BuildRemotePolicy().CanEnqueueDownload;
+    private bool CanActOnSelectedQueueItems() => SelectedQueueCount > 0;
+
+    partial void OnTransferMaxConcurrencyChanged(int value)
+    {
+        var normalized = NormalizeTransferConcurrency(value);
+        if (value != normalized)
+        {
+            TransferMaxConcurrency = normalized;
+            return;
+        }
+
+        OnPropertyChanged(nameof(StatusConcurrencyText));
+        _ = PersistProfileAsync();
+    }
+
+    partial void OnTransferMaxBytesPerSecondChanged(int value)
+    {
+        var normalized = NormalizeTransferMaxBytesPerSecond(value);
+        if (value != normalized)
+        {
+            TransferMaxBytesPerSecond = normalized;
+            return;
+        }
+
+        OnPropertyChanged(nameof(TransferMaxKilobytesPerSecond));
+        OnPropertyChanged(nameof(StatusThrottleText));
+        _ = PersistProfileAsync();
+    }
+
+    partial void OnUploadConflictDefaultPolicyChanged(TransferConflictPolicy value)
+    {
+        _ = PersistProfileAsync();
+    }
+
+    partial void OnDownloadConflictDefaultPolicyChanged(TransferConflictPolicy value)
+    {
+        _ = PersistProfileAsync();
+    }
+
+    partial void OnRemotePathChanged(string value)
+    {
+        OnPropertyChanged(nameof(RemotePathDisplay));
+    }
+
+    partial void OnLoginStatusChanged(string value)
+    {
+        OnPropertyChanged(nameof(StatusThrottleText));
+        OnPropertyChanged(nameof(StatusConcurrencyText));
+    }
+
+    partial void OnSelectedQueueCountChanged(int value)
+    {
+        PauseSelectedJobCommand.NotifyCanExecuteChanged();
+        ResumeSelectedJobCommand.NotifyCanExecuteChanged();
+        RetrySelectedJobCommand.NotifyCanExecuteChanged();
+        CancelSelectedJobCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SelectedQueueCountText));
+    }
+
+    partial void OnSelectedQueueStatusFilterChanged(string value)
+    {
+        QueueItemsView.Refresh();
+    }
+
+    partial void OnSelectedQueueDirectionFilterChanged(string value)
+    {
+        QueueItemsView.Refresh();
+    }
+
+    public string SelectedQueueCountText => SelectedQueueCount > 0 ? $"Selected: {SelectedQueueCount}" : string.Empty;
+
+    public void UpdateSelectedQueueSelection(IList selectedRows)
+    {
+        SelectedQueueJobIds.Clear();
+        foreach (var id in selectedRows.Cast<object>().OfType<QueueItemView>().Select(x => x.JobId).Distinct())
+        {
+            SelectedQueueJobIds.Add(id);
+        }
+
+        SelectedQueueCount = SelectedQueueJobIds.Count;
+    }
+
+    private async Task ApplyToSelectedQueueJobsAsync(Func<Guid, CancellationToken, Task> operation)
+    {
+        var selectedIds = SelectedQueueJobIds.ToList();
+        if (selectedIds.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var jobId in selectedIds)
+        {
+            await operation(jobId, CancellationToken.None);
+        }
+    }
+
+    private bool ShouldIncludeQueueItem(object item)
+    {
+        if (item is not QueueItemView queueItem)
+        {
+            return false;
+        }
+
+        if (!string.Equals(SelectedQueueStatusFilter, QueueFilterAll, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(queueItem.Status.ToString(), SelectedQueueStatusFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.Equals(SelectedQueueDirectionFilter, QueueFilterAll, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(queueItem.Request.Direction.ToString(), SelectedQueueDirectionFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
 
     private void StartSelectionChangeLoad(Func<CancellationToken, Task> operation, string errorMessage)
     {
@@ -1231,8 +1531,21 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        var key = $"{entry.FullPath}|{entry.Name}";
+        lock (_remoteEnrichmentLock)
+        {
+            if (_remoteEnrichmentInFlight.Contains(key))
+            {
+                return;
+            }
+
+            _remoteEnrichmentInFlight.Add(key);
+        }
+
         try
         {
+            var wasSelected = string.Equals(SelectedRemoteEntry?.FullPath, entry.FullPath, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(SelectedRemoteEntry?.Name, entry.Name, StringComparison.Ordinal);
             var details = await _azureFilesBrowserService.GetEntryDetailsAsync(
                 new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
                 CancellationToken.None);
@@ -1241,15 +1554,36 @@ public partial class MainViewModel : ObservableObject
                 return;
             }
 
-            ReplaceRemoteEntry(entry, entry with
+            var replacement = entry with
             {
                 CreatedTime = details.CreatedTime,
                 Author = details.Author ?? entry.Author
-            });
+            };
+            ReplaceRemoteEntry(entry, replacement);
+
+            if (wasSelected)
+            {
+                _isUpdatingRemoteSelection = true;
+                try
+                {
+                    SelectedRemoteEntry = replacement;
+                }
+                finally
+                {
+                    _isUpdatingRemoteSelection = false;
+                }
+            }
         }
         catch (Exception ex)
         {
             Log.Debug(ex, "Failed to enrich remote entry metadata for {Path}", entry.FullPath);
+        }
+        finally
+        {
+            lock (_remoteEnrichmentLock)
+            {
+                _remoteEnrichmentInFlight.Remove(key);
+            }
         }
     }
 
@@ -1287,10 +1621,6 @@ public partial class MainViewModel : ObservableObject
             RemoteGridEntries[gridIndex] = replacement;
         }
 
-        if (ReferenceEquals(SelectedRemoteEntry, original))
-        {
-            SelectedRemoteEntry = replacement;
-        }
     }
 
     private void RefreshLocalGridEntries()
@@ -1325,4 +1655,118 @@ public partial class MainViewModel : ObservableObject
             RemoteGridEntries.Add(entry);
         }
     }
+
+    private async Task ResolveAndEnqueueBatchAsync(IReadOnlyList<TransferRequest> requests, bool startImmediately)
+    {
+        if (requests.Count == 0)
+        {
+            return;
+        }
+
+        var owner = Application.Current?.MainWindow;
+        TransferConflictPolicy? doForAllPolicy = null;
+
+        foreach (var request in requests)
+        {
+            var hasConflict = await _transferConflictProbeService
+                .HasConflictAsync(request.Direction, request.LocalPath, request.RemotePath, CancellationToken.None);
+
+            if (!hasConflict)
+            {
+                _transferQueueService.Enqueue(request with { ConflictNote = "No conflict detected at queue time." }, startImmediately);
+                continue;
+            }
+
+            var policy = request.ConflictPolicy;
+            if (policy == TransferConflictPolicy.Ask && doForAllPolicy.HasValue)
+            {
+                policy = doForAllPolicy.Value;
+            }
+
+            if (policy == TransferConflictPolicy.Ask)
+            {
+                if (owner is null || !ConflictResolutionWindow.TryShow(
+                        owner,
+                        request.Direction,
+                        request.LocalPath,
+                        BuildDestinationDisplay(request.RemotePath, request.LocalPath, request.Direction),
+                        out var action,
+                        out var doForAll))
+                {
+                    break;
+                }
+
+                if (action == ConflictPromptAction.CancelBatch)
+                {
+                    break;
+                }
+
+                policy = action switch
+                {
+                    ConflictPromptAction.Overwrite => TransferConflictPolicy.Overwrite,
+                    ConflictPromptAction.Rename => TransferConflictPolicy.Rename,
+                    ConflictPromptAction.Skip => TransferConflictPolicy.Skip,
+                    _ => TransferConflictPolicy.Skip
+                };
+
+                if (doForAll)
+                {
+                    doForAllPolicy = policy;
+                }
+            }
+
+            if (policy == TransferConflictPolicy.Skip)
+            {
+                continue;
+            }
+
+            var effectiveRequest = request with
+            {
+                ConflictPolicy = policy,
+                ConflictNote = $"Resolved conflict using policy: {policy}"
+            };
+
+            if (policy == TransferConflictPolicy.Rename)
+            {
+                var renamed = await _transferConflictProbeService
+                    .ResolveRenameTargetAsync(request.Direction, request.LocalPath, request.RemotePath, CancellationToken.None);
+                effectiveRequest = effectiveRequest with
+                {
+                    LocalPath = renamed.LocalPath,
+                    RemotePath = renamed.RemotePath,
+                    ConflictNote = "Resolved conflict using policy: Rename (auto-suffix)."
+                };
+            }
+
+            _transferQueueService.Enqueue(effectiveRequest, startImmediately);
+        }
+    }
+
+    private static string BuildDestinationDisplay(SharePath remotePath, string localPath, TransferDirection direction) =>
+        direction == TransferDirection.Upload
+            ? $"{remotePath.StorageAccountName}/{remotePath.ShareName}/{remotePath.NormalizeRelativePath()}"
+            : localPath;
+
+    private TransferRequest CreateTransferRequest(
+        TransferDirection direction,
+        string localPath,
+        SharePath remotePath,
+        TransferConflictPolicy conflictPolicy) =>
+        new(
+            direction,
+            localPath,
+            remotePath,
+            ConflictPolicy: conflictPolicy,
+            IsDirectory: false,
+            MaxConcurrency: TransferMaxConcurrency,
+            MaxBytesPerSecond: TransferMaxBytesPerSecond);
+
+    private static int NormalizeTransferConcurrency(int value) =>
+        Math.Clamp(value <= 0 ? DefaultTransferConcurrency : value, MinTransferConcurrency, MaxTransferConcurrency);
+
+    private static int NormalizeTransferMaxBytesPerSecond(int value) =>
+        Math.Clamp(value, MinTransferMaxBytesPerSecond, MaxTransferMaxBytesPerSecond);
+
+    private static TransferConflictPolicy NormalizeConflictPolicy(TransferConflictPolicy value) =>
+        Enum.IsDefined(typeof(TransferConflictPolicy), value) ? value : TransferConflictPolicy.Ask;
 }
