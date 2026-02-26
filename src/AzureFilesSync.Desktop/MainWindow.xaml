@@ -5,7 +5,8 @@
         xmlns:conv="clr-namespace:AzureFilesSync.Desktop.Converters"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Azure Files Sync Client"
+        Title="Storage Zilla by Danm@de Software"
+        Icon="Assets/Branding/app.ico"
         Height="760"
         Width="1280"
         MinHeight="600"
@@ -20,12 +21,25 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="220" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Menu Grid.Row="0" Margin="0,0,0,8">
+        <Border Grid.Row="0" Background="#F3F8FF" BorderBrush="#C9DCF7" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Image Height="24"
+                       Stretch="Uniform"
+                       Source="/Assets/Branding/wordmark-24.png" />
+                <TextBlock Margin="10,0,0,0"
+                           VerticalAlignment="Center"
+                           Foreground="#405A78"
+                           Text="Azure Files dual-pane sync client" />
+            </StackPanel>
+        </Border>
+
+        <Menu Grid.Row="1" Margin="0,0,0,8">
             <MenuItem Header="_File">
                 <MenuItem Header="_Sign In" Command="{Binding SignInCommand}" />
                 <MenuItem Header="Sign _Out" Command="{Binding SignOutCommand}" />
@@ -43,7 +57,7 @@
             </MenuItem>
         </Menu>
 
-        <Grid Grid.Row="1" Margin="0,0,0,8">
+        <Grid Grid.Row="2" Margin="0,0,0,8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -70,7 +84,7 @@
                        Text="Mirror planning is temporarily unavailable." />
         </Grid>
 
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="50" />
@@ -242,7 +256,7 @@
             </Grid>
         </Grid>
 
-        <Grid Grid.Row="3" Margin="0,8,0,0">
+        <Grid Grid.Row="4" Margin="0,8,0,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -313,7 +327,7 @@
             </DataGrid>
         </Grid>
 
-        <StatusBar Grid.Row="4" Margin="0,8,0,0">
+        <StatusBar Grid.Row="5" Margin="0,8,0,0">
             <StatusBarItem>
                 <TextBlock Text="{Binding LoginStatus}" />
             </StatusBarItem>

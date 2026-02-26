@@ -557,12 +557,15 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void ShowAbout()
     {
-        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
-        MessageBox.Show(
-            $"Storage Zilla\nVersion: {version}",
-            "About",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        var assembly = Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion?
+            .Split('+')[0];
+        var version = string.IsNullOrWhiteSpace(informationalVersion)
+            ? assembly.GetName().Version?.ToString() ?? "unknown"
+            : informationalVersion;
+        AboutWindow.Show(Application.Current?.MainWindow, version);
     }
 
     [RelayCommand]

@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Desktop.Branding;
 
 namespace AzureFilesSync.Desktop.Dialogs;
 
@@ -19,9 +21,10 @@ public sealed class TransferSettingsWindow : Window
     {
         Title = "Transfer Settings";
         Width = 440;
-        Height = 360;
+        Height = 410;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
+        Icon = BrandAssets.CreateAppIcon();
 
         var root = new Grid { Margin = new Thickness(12) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -32,13 +35,47 @@ public sealed class TransferSettingsWindow : Window
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var header = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F3F8FF")),
+            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#C9DCF7")),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        var headerPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        headerPanel.Children.Add(new Image
+        {
+            Width = 20,
+            Height = 20,
+            Source = BrandAssets.CreateImage(BrandAssets.Logo24RelativeUri)
+        });
+        headerPanel.Children.Add(new TextBlock
+        {
+            Text = "Transfer defaults",
+            Margin = new Thickness(8, 0, 0, 0),
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1F2937")),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        header.Child = headerPanel;
+        Grid.SetRow(header, 0);
+        root.Children.Add(header);
 
         var concurrencyLabel = new TextBlock
         {
             Text = "Max concurrency (1-32):",
             Margin = new Thickness(0, 0, 0, 6)
         };
-        Grid.SetRow(concurrencyLabel, 0);
+        Grid.SetRow(concurrencyLabel, 1);
         root.Children.Add(concurrencyLabel);
 
         _concurrencyBox = new TextBox
@@ -46,7 +83,7 @@ public sealed class TransferSettingsWindow : Window
             Text = currentConcurrency.ToString(),
             MinWidth = 380
         };
-        Grid.SetRow(_concurrencyBox, 1);
+        Grid.SetRow(_concurrencyBox, 2);
         root.Children.Add(_concurrencyBox);
 
         var throttleLabel = new TextBlock
@@ -54,7 +91,7 @@ public sealed class TransferSettingsWindow : Window
             Text = "Throttle KB/s (0 = unlimited):",
             Margin = new Thickness(0, 12, 0, 6)
         };
-        Grid.SetRow(throttleLabel, 2);
+        Grid.SetRow(throttleLabel, 3);
         root.Children.Add(throttleLabel);
 
         _throttleKbBox = new TextBox
@@ -62,7 +99,7 @@ public sealed class TransferSettingsWindow : Window
             Text = currentThrottleKb.ToString(),
             MinWidth = 380
         };
-        Grid.SetRow(_throttleKbBox, 3);
+        Grid.SetRow(_throttleKbBox, 4);
         root.Children.Add(_throttleKbBox);
 
         var uploadConflictLabel = new TextBlock
@@ -70,7 +107,7 @@ public sealed class TransferSettingsWindow : Window
             Text = "Default upload conflict policy:",
             Margin = new Thickness(0, 12, 0, 6)
         };
-        Grid.SetRow(uploadConflictLabel, 4);
+        Grid.SetRow(uploadConflictLabel, 5);
         root.Children.Add(uploadConflictLabel);
 
         _uploadConflictPolicyBox = new ComboBox
@@ -79,7 +116,7 @@ public sealed class TransferSettingsWindow : Window
             ItemsSource = Enum.GetValues<TransferConflictPolicy>(),
             SelectedItem = currentUploadConflictPolicy
         };
-        Grid.SetRow(_uploadConflictPolicyBox, 5);
+        Grid.SetRow(_uploadConflictPolicyBox, 6);
         root.Children.Add(_uploadConflictPolicyBox);
 
         var downloadConflictLabel = new TextBlock
@@ -87,7 +124,7 @@ public sealed class TransferSettingsWindow : Window
             Text = "Default download conflict policy:",
             Margin = new Thickness(0, 12, 0, 6)
         };
-        Grid.SetRow(downloadConflictLabel, 6);
+        Grid.SetRow(downloadConflictLabel, 7);
         root.Children.Add(downloadConflictLabel);
 
         _downloadConflictPolicyBox = new ComboBox
@@ -96,7 +133,7 @@ public sealed class TransferSettingsWindow : Window
             ItemsSource = Enum.GetValues<TransferConflictPolicy>(),
             SelectedItem = currentDownloadConflictPolicy
         };
-        Grid.SetRow(_downloadConflictPolicyBox, 7);
+        Grid.SetRow(_downloadConflictPolicyBox, 8);
         root.Children.Add(_downloadConflictPolicyBox);
 
         var buttons = new StackPanel
@@ -110,7 +147,7 @@ public sealed class TransferSettingsWindow : Window
         var cancel = new Button { Content = "Cancel", Width = 90, Margin = new Thickness(8, 0, 0, 0), IsCancel = true };
         buttons.Children.Add(ok);
         buttons.Children.Add(cancel);
-        Grid.SetRow(buttons, 8);
+        Grid.SetRow(buttons, 9);
         root.Children.Add(buttons);
 
         Content = root;

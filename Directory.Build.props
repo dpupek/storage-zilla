@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.0.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''">local</VersionSuffix>
+    <Version Condition="'$(Version)' == '' and '$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</Version>
+    <Version Condition="'$(Version)' == '' and '$(VersionSuffix)' == ''">$(VersionPrefix)</Version>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(VersionPrefix).0</AssemblyVersion>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(VersionPrefix).0</FileVersion>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

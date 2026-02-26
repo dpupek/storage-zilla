@@ -1,5 +1,7 @@
 # Storage Zilla
 
+![Storage Zilla Logo](img/storage-zilla-logo-icon.png)
+
 Storage Zilla is a .NET 10 WPF desktop client that provides an FTP-style, side-by-side workflow for Azure File Shares:
 - Interactive Azure sign-in
 - Subscription and storage account discovery
@@ -35,6 +37,40 @@ dotnet test AzureFilesSync.slnx -c Debug
 ```powershell
 dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c Debug
 ```
+
+## Installer (MSIX)
+- Packaging project: `installer/StorageZilla.Package/StorageZilla.Package.wapproj`
+- Release architecture: `x64`
+- Runtime model: self-contained (`win-x64`) so installer includes .NET runtime dependencies.
+
+## Release Tags and Version Consistency
+- Release automation triggers on tags that match `v1.x.x` (example: `v1.4.2`).
+- The tag version (`1.4.2`) is applied to:
+  - assembly informational version
+  - file/assembly versions
+  - About dialog version text
+- MSIX package version is set to `1.4.2.0` (Windows package format requires four parts).
+
+Create and push a release tag:
+```powershell
+git tag v1.4.2
+git push origin v1.4.2
+```
+
+## GitHub Release Pipeline Secrets
+The release workflow `.github/workflows/release-msix.yml` requires:
+- `MSIX_CERT_BASE64`: base64-encoded PFX certificate content.
+- `MSIX_CERT_PASSWORD`: PFX password.
+- `MSIX_PUBLISHER`: publisher subject string (must match certificate subject), for example `CN=Danm@de Software`.
+
+## Licensing
+Storage Zilla is dual-licensed:
+- `GPL-3.0-or-later` (open-source use and distribution under GPL terms), or
+- a separate commercial license.
+
+Choose one license path:
+1. Use under GPL terms: see [LICENSE](LICENSE).
+2. Use under commercial terms: see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL).
 
 ## Logging
 - App uses Serilog with file sink.

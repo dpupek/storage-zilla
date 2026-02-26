@@ -12,10 +12,11 @@ public static class ErrorDialog
         Log.Error(exception, "{Summary}", summary);
 
         var owner = Application.Current?.MainWindow;
-        var dialog = new ErrorDialogWindow(summary, details)
+        var dialog = new ErrorDialogWindow(summary, details);
+        if (owner is { IsLoaded: true, IsVisible: true })
         {
-            Owner = owner
-        };
+            dialog.Owner = owner;
+        }
 
         dialog.ShowDialog();
     }
@@ -25,10 +26,11 @@ public static class ErrorDialog
         Log.Error("{Summary}: {Details}", summary, details);
 
         var owner = Application.Current?.MainWindow;
-        var dialog = new ErrorDialogWindow(summary, details)
+        var dialog = new ErrorDialogWindow(summary, details);
+        if (owner is { IsLoaded: true, IsVisible: true })
         {
-            Owner = owner
-        };
+            dialog.Owner = owner;
+        }
 
         dialog.ShowDialog();
     }

@@ -26,7 +26,9 @@
 - [x] Add resume safety checks and integrity verification on downloads when remote hash is available.
 - [x] Add richer error categorization.
 - [x] Add bandwidth throttling and per-job concurrency controls.
-- [ ] Add packaging and installer profile.
+- [x] Add packaging and installer profile.
+- [x] Add release pipeline that builds/signs MSIX on `v1.x.x` tags and publishes GitHub releases.
+- [x] Align About dialog version display with release tag version.
 
 ## Phase 7: Live Integration Coverage (child-0006)
 - [x] Add env-gated live Azure Files upload/download integration test.

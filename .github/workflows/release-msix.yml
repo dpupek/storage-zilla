@@ -1,0 +1,140 @@
+name: Release MSIX
+
+on:
+  push:
+    tags:
+      - "v1.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-msix:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Parse and validate release tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v1\.\d+\.\d+$') {
+            throw "Tag '$tag' does not match required format v1.x.x."
+          }
+
+          $version = $tag.Substring(1)
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore AzureFilesSync.slnx
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build AzureFilesSync.slnx `
+            -c Release `
+            /p:VersionPrefix=${{ steps.version.outputs.version }} `
+            /p:VersionSuffix=
+
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet test AzureFilesSync.slnx `
+            -c Release `
+            --no-build `
+            /p:VersionPrefix=${{ steps.version.outputs.version }} `
+            /p:VersionSuffix=
+
+      - name: Verify assembly informational version matches tag
+        shell: pwsh
+        run: |
+          $dll = Resolve-Path "src/AzureFilesSync.Desktop/bin/Release/net10.0-windows/AzureFilesSync.Desktop.dll"
+          $actual = (Get-Item $dll).VersionInfo.ProductVersion
+          $expected = "${{ steps.version.outputs.version }}"
+          if ($actual -ne $expected) {
+            throw "Assembly informational version mismatch. Expected '$expected' but found '$actual'."
+          }
+
+      - name: Prepare signing certificate
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "storage-zilla-release.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String("${{ secrets.MSIX_CERT_BASE64 }}"))
+          "MSIX_CERT_PATH=$certPath" >> $env:GITHUB_ENV
+
+      - name: Apply package publisher from secret
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.MSIX_PUBLISHER }}")) {
+            throw "MSIX_PUBLISHER secret is required."
+          }
+          [xml]$manifest = Get-Content "installer/StorageZilla.Package/Package.appxmanifest"
+          $manifest.Package.Identity.Publisher = "${{ secrets.MSIX_PUBLISHER }}"
+          $manifest.Save("installer/StorageZilla.Package/Package.appxmanifest")
+
+      - name: Build signed MSIX package
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP "msix"
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+
+          msbuild installer/StorageZilla.Package/StorageZilla.Package.wapproj `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:AppxBundle=Never `
+            /p:UapAppxPackageBuildMode=SideLoadOnly `
+            /p:AppxPackageDir="$packageDir\\" `
+            /p:AppxPackageSigningEnabled=true `
+            /p:PackageCertificateKeyFile="$env:MSIX_CERT_PATH" `
+            /p:PackageCertificatePassword="${{ secrets.MSIX_CERT_PASSWORD }}" `
+            /p:AppxPackageVersion="${{ steps.version.outputs.version }}.0" `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:SelfContained=true `
+            /p:VersionPrefix=${{ steps.version.outputs.version }} `
+            /p:VersionSuffix=
+
+      - name: Resolve MSIX artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP "msix") -Recurse -Filter *.msix | Select-Object -First 1
+          if ($null -eq $msix) {
+            throw "No .msix artifact was produced."
+          }
+          $expected = "${{ steps.version.outputs.version }}"
+          if ($msix.Name -notmatch [Regex]::Escape($expected)) {
+            throw "MSIX artifact '$($msix.Name)' does not include expected version '$expected'."
+          }
+          "msix_path=$($msix.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Write SHA256
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash "${{ steps.artifact.outputs.msix_path }}" -Algorithm SHA256
+          $line = "$($hash.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($hash.Path))"
+          $shaPath = Join-Path (Split-Path "${{ steps.artifact.outputs.msix_path }}" -Parent) "SHA256SUMS.txt"
+          Set-Content -Path $shaPath -Value $line -NoNewline
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Storage Zilla v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.artifact.outputs.msix_path }}
+            ${{ runner.temp }}\msix\SHA256SUMS.txt
