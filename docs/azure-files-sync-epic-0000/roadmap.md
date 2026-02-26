@@ -29,6 +29,8 @@
 - [x] Add packaging and installer profile.
 - [x] Add branch-based release pipelines for `beta` (prerelease) and `main` (stable) with signed MSIX publishing.
 - [x] Align About dialog version display with computed build version metadata.
+- [x] Harden reusable release workflow error handling for runner/SDK/certificate failures.
+- [x] Add release helper script to rotate MSIX GitHub secrets from a validated PFX export.
 
 ## Phase 7: Live Integration Coverage (child-0006)
 - [x] Add env-gated live Azure Files upload/download integration test.
@@ -73,6 +75,9 @@
 - [x] Add GitHub latest stable release lookup and installer asset discovery.
 - [x] Add update download + SHA256 + publisher/version validation before install launch.
 - [x] Add update channel selection (`Stable`/`Beta`) and persist it in profile/settings.
+- [x] Add unsigned MSI artifact publishing alongside signed MSIX in release pipeline.
+- [x] Add MSI install UX: license dialog, install directory selection, Start Menu shortcut.
+- [x] Brand MSI welcome/license banner assets from project logo set.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
