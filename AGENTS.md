@@ -14,6 +14,19 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - Run all tests: `dotnet test AzureFilesSync.slnx -c Debug`
 - Desktop app: `dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c Debug`
 
+## Release Process
+- Branch model: `dev` -> `beta` -> `main`.
+- `dev` is integration only and does not publish releases.
+- `beta` publishes prerelease MSIX artifacts via `.github/workflows/release-beta.yml` on every push.
+- `main` publishes stable MSIX artifacts via `.github/workflows/release-prod.yml` on every push.
+- Both wrappers call `.github/workflows/release-msix-common.yml`; keep shared release logic there to stay DRY.
+- Kick off beta release:
+  - merge/promote changes to `beta`
+  - `git push -u origin beta` (first time) or `git push origin beta`
+- Kick off prod release:
+  - merge/promote validated beta changes to `main`
+  - `git push origin main`
+
 ## Architecture
 - `src/AzureFilesSync.Core`: contracts, models, domain services.
 - `src/AzureFilesSync.Infrastructure`: Azure SDK integrations, queue/runtime infrastructure.
@@ -52,6 +65,8 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - Use Serilog for info/debug/error with file output.
 - Current baseline log level is `Debug`; keep rich context fields (`subscription`, `account`, `share`, `path`) in logs.
 - Log location: `%LOCALAPPDATA%/AzureFilesSync/logs`.
+- Store temporary scratch artifacts (downloaded logs, throwaway exports, ad hoc diagnostics) in the repo-local `.tmp/` folder.
+- Do not leave temp files at repo root; clean up `.tmp/` entries when no longer needed.
 
 ## Testing Conventions
 - Use AAAA style in tests:
