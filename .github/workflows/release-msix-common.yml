@@ -116,8 +116,10 @@ jobs:
 
       - name: Prepare signing certificate
         shell: pwsh
+        env:
+          MSIX_CERT_BASE64: ${{ secrets.MSIX_CERT_BASE64 }}
         run: |
-          $certBase64 = "${{ secrets.MSIX_CERT_BASE64 }}"
+          $certBase64 = $env:MSIX_CERT_BASE64
           if ([string]::IsNullOrWhiteSpace($certBase64)) {
             throw "MSIX_CERT_BASE64 is empty."
           }
@@ -128,8 +130,10 @@ jobs:
 
       - name: Validate signing certificate
         shell: pwsh
+        env:
+          MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
         run: |
-          $certPassword = "${{ secrets.MSIX_CERT_PASSWORD }}"
+          $certPassword = $env:MSIX_CERT_PASSWORD
           if ([string]::IsNullOrWhiteSpace($certPassword)) {
             throw "MSIX_CERT_PASSWORD is empty."
           }
@@ -158,6 +162,8 @@ jobs:
 
       - name: Apply package publisher from secret
         shell: pwsh
+        env:
+          MSIX_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
         run: |
           $manifestPath = "installer/StorageZilla.Package/Package.appxmanifest"
           [xml]$manifest = Get-Content $manifestPath
@@ -167,7 +173,7 @@ jobs:
           if ($null -eq $identity) {
             throw "Unable to find Package/Identity node in $manifestPath."
           }
-          $publisherFromSecret = "${{ secrets.MSIX_PUBLISHER }}"
+          $publisherFromSecret = $env:MSIX_PUBLISHER
           if ([string]::IsNullOrWhiteSpace($publisherFromSecret)) {
             $existingPublisher = $identity.GetAttribute("Publisher")
             if ([string]::IsNullOrWhiteSpace($existingPublisher)) {
@@ -181,24 +187,29 @@ jobs:
 
       - name: Build signed MSIX package
         shell: pwsh
+        env:
+          MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
         run: |
           $packageDir = Join-Path $env:RUNNER_TEMP "msix"
           New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
-          msbuild installer/StorageZilla.Package/StorageZilla.Package.wapproj `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /p:AppxBundle=Never `
-            /p:UapAppxPackageBuildMode=SideLoadOnly `
-            /p:AppxPackageDir="$packageDir\\" `
-            /p:AppxPackageSigningEnabled=true `
-            /p:PackageCertificateKeyFile="$env:MSIX_CERT_PATH" `
-            /p:PackageCertificatePassword="${{ secrets.MSIX_CERT_PASSWORD }}" `
-            /p:AppxPackageVersion="${{ steps.version.outputs.base_version }}.0" `
-            /p:RuntimeIdentifier=win-x64 `
-            /p:SelfContained=true `
-            /p:VersionPrefix=${{ steps.version.outputs.base_version }} `
-            /p:VersionSuffix=
+          $msbuildArgs = @(
+            "installer/StorageZilla.Package/StorageZilla.Package.wapproj"
+            "/p:Configuration=Release"
+            "/p:Platform=x64"
+            "/p:AppxBundle=Never"
+            "/p:UapAppxPackageBuildMode=SideLoadOnly"
+            "/p:AppxPackageDir=$packageDir\\"
+            "/p:AppxPackageSigningEnabled=true"
+            "/p:PackageCertificateKeyFile=$env:MSIX_CERT_PATH"
+            "/p:PackageCertificatePassword=$env:MSIX_CERT_PASSWORD"
+            "/p:AppxPackageVersion=${{ steps.version.outputs.base_version }}.0"
+            "/p:RuntimeIdentifier=win-x64"
+            "/p:SelfContained=true"
+            "/p:VersionPrefix=${{ steps.version.outputs.base_version }}"
+            "/p:VersionSuffix="
+          )
+          & msbuild @msbuildArgs
 
       - name: Resolve MSIX artifact
         id: artifact
