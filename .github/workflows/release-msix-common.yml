@@ -75,13 +75,14 @@ jobs:
 
       - name: Restore
         shell: pwsh
-        run: dotnet restore AzureFilesSync.slnx
+        run: dotnet restore AzureFilesSync.slnx -r win-x64
 
       - name: Build
         shell: pwsh
         run: |
           dotnet build AzureFilesSync.slnx `
             -c Release `
+            /p:RuntimeIdentifier=win-x64 `
             /p:VersionPrefix=${{ steps.version.outputs.base_version }} `
             /p:VersionSuffix=${{ steps.version.outputs.prerelease }}
 
@@ -91,6 +92,7 @@ jobs:
           dotnet test AzureFilesSync.slnx `
             -c Release `
             --no-build `
+            /p:RuntimeIdentifier=win-x64 `
             /p:VersionPrefix=${{ steps.version.outputs.base_version }} `
             /p:VersionSuffix=${{ steps.version.outputs.prerelease }}
 
