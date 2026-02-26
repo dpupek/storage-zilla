@@ -263,6 +263,7 @@ jobs:
           & candle `
             -nologo `
             -arch x64 `
+            -ext WixUIExtension `
             -dPublishDir="$env:MSI_PUBLISH_DIR" `
             -dProductVersion="${{ steps.version.outputs.base_version }}.0" `
             -out "$env:RUNNER_TEMP\\" `
@@ -275,6 +276,7 @@ jobs:
 
           & light `
             -nologo `
+            -ext WixUIExtension `
             -out "$msiPath" `
             "$productObj" `
             "$filesObj"

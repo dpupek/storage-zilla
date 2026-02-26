@@ -15,9 +15,16 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Storage Zilla is already installed." />
     <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon.ico" SourceFile="src\AzureFilesSync.Desktop\Assets\Branding\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="WixUILicenseRtf" Value="installer\StorageZilla.Msi\Eula.rtf" />
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
 
     <Feature Id="ProductFeature" Title="Storage Zilla" Level="1">
       <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
     </Feature>
   </Product>
 
@@ -26,6 +33,22 @@
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="Storage Zilla" />
       </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="StorageZillaProgramMenuDir" Name="Storage Zilla" />
+      </Directory>
     </Directory>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="StartMenuShortcutComponent" Directory="StorageZillaProgramMenuDir" Guid="8E0A4166-0EA0-4D64-B7AB-177A45B0BFF7">
+      <Shortcut
+        Id="StartMenuShortcut"
+        Name="Storage Zilla"
+        Description="Storage Zilla by Danm@de Software"
+        Target="[INSTALLFOLDER]AzureFilesSync.Desktop.exe"
+        WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="StorageZillaProgramMenuDir" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Danmade\StorageZilla" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
   </Fragment>
 </Wix>
