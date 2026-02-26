@@ -11,6 +11,13 @@ on:
         description: "Whether to publish as prerelease"
         required: true
         type: boolean
+    secrets:
+      MSIX_CERT_BASE64:
+        required: true
+      MSIX_CERT_PASSWORD:
+        required: true
+      MSIX_PUBLISHER:
+        required: false
 
 permissions:
   contents: write
