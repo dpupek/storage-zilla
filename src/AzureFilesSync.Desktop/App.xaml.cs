@@ -1,4 +1,5 @@
 using AzureFilesSync.Desktop.Dialogs;
+using AzureFilesSync.Desktop.Services;
 using AzureFilesSync.Desktop.ViewModels;
 using AzureFilesSync.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,7 @@ public partial class App : Application
             .ConfigureServices(services =>
             {
                 services.AddAzureFilesSyncServices();
+                services.AddSingleton<IConflictResolutionPromptService, WpfConflictResolutionPromptService>();
                 services.AddSingleton<MainViewModel>();
                 services.AddSingleton<MainWindow>();
             })

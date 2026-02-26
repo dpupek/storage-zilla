@@ -4,6 +4,7 @@ using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.Models;
+using AzureFilesSync.Desktop.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
@@ -33,6 +34,7 @@ public partial class MainViewModel : ObservableObject
     private readonly ILocalFileOperationsService _localFileOperationsService;
     private readonly IRemoteFileOperationsService _remoteFileOperationsService;
     private readonly ITransferConflictProbeService _transferConflictProbeService;
+    private readonly IConflictResolutionPromptService _conflictResolutionPromptService;
     private readonly ITransferQueueService _transferQueueService;
     private readonly IMirrorPlannerService _mirrorPlanner;
     private readonly IMirrorExecutionService _mirrorExecution;
@@ -84,6 +86,9 @@ public partial class MainViewModel : ObservableObject
     private string _loginStatus = "Not signed in";
 
     [ObservableProperty]
+    private string _queueBatchStatusMessage = string.Empty;
+
+    [ObservableProperty]
     private string _localPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     [ObservableProperty]
@@ -129,6 +134,7 @@ public partial class MainViewModel : ObservableObject
             : $"Throttle: {TransferMaxKilobytesPerSecond:N0} KB/s";
 
     public string StatusConcurrencyText => $"Concurrency: {TransferMaxConcurrency}";
+    public string StatusQueueText => string.IsNullOrWhiteSpace(QueueBatchStatusMessage) ? "Queue: idle" : QueueBatchStatusMessage;
 
     public string RemotePathDisplay
     {
@@ -211,6 +217,7 @@ public partial class MainViewModel : ObservableObject
         ILocalFileOperationsService localFileOperationsService,
         IRemoteFileOperationsService remoteFileOperationsService,
         ITransferConflictProbeService transferConflictProbeService,
+        IConflictResolutionPromptService conflictResolutionPromptService,
         ITransferQueueService transferQueueService,
         IMirrorPlannerService mirrorPlanner,
         IMirrorExecutionService mirrorExecution,
@@ -225,6 +232,7 @@ public partial class MainViewModel : ObservableObject
         _localFileOperationsService = localFileOperationsService;
         _remoteFileOperationsService = remoteFileOperationsService;
         _transferConflictProbeService = transferConflictProbeService;
+        _conflictResolutionPromptService = conflictResolutionPromptService;
         _transferQueueService = transferQueueService;
         _mirrorPlanner = mirrorPlanner;
         _mirrorExecution = mirrorExecution;
@@ -407,7 +415,8 @@ public partial class MainViewModel : ObservableObject
             SelectedLocalEntry.FullPath,
             new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
             UploadConflictDefaultPolicy);
-        await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
+        var batch = await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
+        SetQueueBatchStatus(batch);
         await PersistProfileAsync();
     }
 
@@ -427,7 +436,8 @@ public partial class MainViewModel : ObservableObject
             localTarget,
             new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, SelectedRemoteEntry.FullPath),
             DownloadConflictDefaultPolicy);
-        await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
+        var batch = await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
+        SetQueueBatchStatus(batch);
         await PersistProfileAsync();
     }
 
@@ -975,7 +985,8 @@ public partial class MainViewModel : ObservableObject
             }
         }
 
-        await ResolveAndEnqueueBatchAsync(requests, startImmediately);
+        var batch = await ResolveAndEnqueueBatchAsync(requests, startImmediately);
+        SetQueueBatchStatus(batch);
         await PersistProfileAsync();
     }
 
@@ -1020,7 +1031,8 @@ public partial class MainViewModel : ObservableObject
             }
         }
 
-        await ResolveAndEnqueueBatchAsync(requests, startImmediately);
+        var batch = await ResolveAndEnqueueBatchAsync(requests, startImmediately);
+        SetQueueBatchStatus(batch);
         await PersistProfileAsync();
     }
 
@@ -1349,6 +1361,7 @@ public partial class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(StatusThrottleText));
         OnPropertyChanged(nameof(StatusConcurrencyText));
+        OnPropertyChanged(nameof(StatusQueueText));
     }
 
     partial void OnSelectedQueueCountChanged(int value)
@@ -1656,14 +1669,14 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private async Task ResolveAndEnqueueBatchAsync(IReadOnlyList<TransferRequest> requests, bool startImmediately)
+    private async Task<QueueBatchResult> ResolveAndEnqueueBatchAsync(IReadOnlyList<TransferRequest> requests, bool startImmediately)
     {
+        var result = new QueueBatchResult { Total = requests.Count };
         if (requests.Count == 0)
         {
-            return;
+            return result;
         }
 
-        var owner = Application.Current?.MainWindow;
         TransferConflictPolicy? doForAllPolicy = null;
 
         foreach (var request in requests)
@@ -1674,9 +1687,11 @@ public partial class MainViewModel : ObservableObject
             if (!hasConflict)
             {
                 _transferQueueService.Enqueue(request with { ConflictNote = "No conflict detected at queue time." }, startImmediately);
+                result.Queued++;
                 continue;
             }
 
+            result.Conflicts++;
             var policy = request.ConflictPolicy;
             if (policy == TransferConflictPolicy.Ask && doForAllPolicy.HasValue)
             {
@@ -1685,19 +1700,20 @@ public partial class MainViewModel : ObservableObject
 
             if (policy == TransferConflictPolicy.Ask)
             {
-                if (owner is null || !ConflictResolutionWindow.TryShow(
-                        owner,
+                if (!_conflictResolutionPromptService.TryResolveConflict(
                         request.Direction,
                         request.LocalPath,
                         BuildDestinationDisplay(request.RemotePath, request.LocalPath, request.Direction),
                         out var action,
                         out var doForAll))
                 {
+                    result.BatchCanceled = true;
                     break;
                 }
 
                 if (action == ConflictPromptAction.CancelBatch)
                 {
+                    result.BatchCanceled = true;
                     break;
                 }
 
@@ -1717,6 +1733,7 @@ public partial class MainViewModel : ObservableObject
 
             if (policy == TransferConflictPolicy.Skip)
             {
+                result.Skipped++;
                 continue;
             }
 
@@ -1739,7 +1756,15 @@ public partial class MainViewModel : ObservableObject
             }
 
             _transferQueueService.Enqueue(effectiveRequest, startImmediately);
+            result.Queued++;
         }
+
+        if (result.BatchCanceled)
+        {
+            result.Skipped += requests.Count - result.Queued - result.Skipped;
+        }
+
+        return result;
     }
 
     private static string BuildDestinationDisplay(SharePath remotePath, string localPath, TransferDirection direction) =>
@@ -1769,4 +1794,21 @@ public partial class MainViewModel : ObservableObject
 
     private static TransferConflictPolicy NormalizeConflictPolicy(TransferConflictPolicy value) =>
         Enum.IsDefined(typeof(TransferConflictPolicy), value) ? value : TransferConflictPolicy.Ask;
+
+    private void SetQueueBatchStatus(QueueBatchResult result)
+    {
+        QueueBatchStatusMessage =
+            $"Queue batch: {result.Queued} queued, {result.Skipped} skipped, {result.Conflicts} conflicts" +
+            (result.BatchCanceled ? ", batch canceled" : string.Empty);
+        OnPropertyChanged(nameof(StatusQueueText));
+    }
+
+    private sealed class QueueBatchResult
+    {
+        public int Total { get; set; }
+        public int Queued { get; set; }
+        public int Skipped { get; set; }
+        public int Conflicts { get; set; }
+        public bool BatchCanceled { get; set; }
+    }
 }

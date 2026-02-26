@@ -1,7 +1,9 @@
 using Azure.Core;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.Models;
+using AzureFilesSync.Desktop.Services;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
 using System.IO;
@@ -191,6 +193,7 @@ public sealed class MainWindowAndViewModelUiTests
             new StubLocalFileOperationsService(),
             new StubRemoteFileOperationsService(),
             new AlwaysConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
             queue,
             new StubMirrorPlannerService(),
             new StubMirrorExecutionService(),
@@ -231,6 +234,7 @@ public sealed class MainWindowAndViewModelUiTests
             new StubLocalFileOperationsService(),
             new StubRemoteFileOperationsService(),
             new AlwaysConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
             queue,
             new StubMirrorPlannerService(),
             new StubMirrorExecutionService(),
@@ -284,6 +288,83 @@ public sealed class MainWindowAndViewModelUiTests
 
         #region Assert
         Assert.Equal("100% (0/0)", progress);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_AskConflict_UsesPromptOverwrite_AndQueues()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new AlwaysConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Overwrite, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.UploadConflictDefaultPolicy = TransferConflictPolicy.Ask;
+        var selected = new ArrayList { new LocalEntry("file.txt", @"C:\work\file.txt", false, 10, DateTimeOffset.UtcNow) };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+
+        #region Act
+        await viewModel.QueueLocalSelectionAsync(selected, startImmediately: true);
+        #endregion
+
+        #region Assert
+        var request = Assert.Single(queue.EnqueuedRequests);
+        Assert.Equal(TransferConflictPolicy.Overwrite, request.ConflictPolicy);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_AskConflict_PromptCancelBatch_DoesNotQueue()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new AlwaysConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.CancelBatch, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.UploadConflictDefaultPolicy = TransferConflictPolicy.Ask;
+        var selected = new ArrayList { new LocalEntry("file.txt", @"C:\work\file.txt", false, 10, DateTimeOffset.UtcNow) };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+
+        #region Act
+        await viewModel.QueueLocalSelectionAsync(selected, startImmediately: true);
+        #endregion
+
+        #region Assert
+        Assert.Empty(queue.EnqueuedRequests);
         #endregion
     }
 
@@ -344,6 +425,7 @@ public sealed class MainWindowAndViewModelUiTests
             new StubLocalFileOperationsService(),
             new StubRemoteFileOperationsService(),
             new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
             queue,
             new StubMirrorPlannerService(),
             new StubMirrorExecutionService(),
@@ -378,6 +460,7 @@ public sealed class MainWindowAndViewModelUiTests
             new StubLocalFileOperationsService(),
             new StubRemoteFileOperationsService(),
             new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
             queue,
             new StubMirrorPlannerService(),
             new StubMirrorExecutionService(),
@@ -397,6 +480,7 @@ public sealed class MainWindowAndViewModelUiTests
         ILocalFileOperationsService localFileOperationsService,
         IRemoteFileOperationsService remoteFileOperationsService,
         ITransferConflictProbeService transferConflictProbeService,
+        IConflictResolutionPromptService conflictResolutionPromptService,
         SpyTransferQueueService queue,
         IMirrorPlannerService mirrorPlannerService,
         IMirrorExecutionService mirrorExecutionService,
@@ -411,6 +495,7 @@ public sealed class MainWindowAndViewModelUiTests
             localFileOperationsService,
             remoteFileOperationsService,
             transferConflictProbeService,
+            conflictResolutionPromptService,
             queue,
             mirrorPlannerService,
             mirrorExecutionService,
@@ -593,6 +678,27 @@ public sealed class MainWindowAndViewModelUiTests
 
         public Task<(string LocalPath, SharePath RemotePath)> ResolveRenameTargetAsync(TransferDirection direction, string localPath, SharePath remotePath, CancellationToken cancellationToken) =>
             Task.FromResult(($"{Path.GetFileNameWithoutExtension(localPath)} (1){Path.GetExtension(localPath)}", remotePath));
+    }
+
+    private sealed class StubConflictResolutionPromptService : IConflictResolutionPromptService
+    {
+        private readonly ConflictPromptAction _action;
+        private readonly bool _doForAll;
+        private readonly bool _returnsResult;
+
+        public StubConflictResolutionPromptService(ConflictPromptAction action, bool doForAll, bool returnsResult)
+        {
+            _action = action;
+            _doForAll = doForAll;
+            _returnsResult = returnsResult;
+        }
+
+        public bool TryResolveConflict(TransferDirection direction, string sourcePath, string destinationPath, out ConflictPromptAction action, out bool doForAll)
+        {
+            action = _action;
+            doForAll = _doForAll;
+            return _returnsResult;
+        }
     }
 
     private sealed class StubMirrorExecutionService : IMirrorExecutionService

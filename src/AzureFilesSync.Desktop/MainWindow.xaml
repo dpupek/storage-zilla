@@ -325,6 +325,10 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusConcurrencyText}" />
             </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusQueueText}" />
+            </StatusBarItem>
         </StatusBar>
     </Grid>
 </Window>
