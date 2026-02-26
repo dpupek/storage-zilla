@@ -222,6 +222,65 @@ jobs:
           )
           & msbuild @msbuildArgs
 
+      - name: Publish desktop payload for MSI
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:RUNNER_TEMP "msi-publish"
+          New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+          dotnet publish src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=false `
+            -o $publishDir
+          "MSI_PUBLISH_DIR=$publishDir" >> $env:GITHUB_ENV
+
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          if (-not (Get-Command heat.exe -ErrorAction SilentlyContinue) -or -not (Get-Command candle.exe -ErrorAction SilentlyContinue) -or -not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress -y
+          }
+
+      - name: Build unsigned MSI package
+        id: msi_artifact
+        shell: pwsh
+        run: |
+          $msiOutDir = Join-Path $env:RUNNER_TEMP "msi"
+          New-Item -ItemType Directory -Path $msiOutDir -Force | Out-Null
+
+          $harvestFile = Join-Path $env:RUNNER_TEMP "StorageZilla.Files.wxs"
+          & heat dir "$env:MSI_PUBLISH_DIR" `
+            -cg AppFiles `
+            -dr INSTALLFOLDER `
+            -srd `
+            -sreg `
+            -scom `
+            -gg `
+            -var var.PublishDir `
+            -out "$harvestFile"
+
+          & candle `
+            -nologo `
+            -arch x64 `
+            -dPublishDir="$env:MSI_PUBLISH_DIR" `
+            -dProductVersion="${{ steps.version.outputs.base_version }}.0" `
+            -out "$env:RUNNER_TEMP\\" `
+            installer/StorageZilla.Msi/Product.wxs `
+            "$harvestFile"
+
+          $productObj = Join-Path $env:RUNNER_TEMP "Product.wixobj"
+          $filesObj = Join-Path $env:RUNNER_TEMP "StorageZilla.Files.wixobj"
+          $msiPath = Join-Path $msiOutDir "StorageZilla_${{ steps.version.outputs.version }}_x64_unsigned.msi"
+
+          & light `
+            -nologo `
+            -out "$msiPath" `
+            "$productObj" `
+            "$filesObj"
+
+          "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
+
       - name: Resolve MSIX artifact
         id: artifact
         shell: pwsh
@@ -235,10 +294,13 @@ jobs:
       - name: Write SHA256
         shell: pwsh
         run: |
-          $hash = Get-FileHash "${{ steps.artifact.outputs.msix_path }}" -Algorithm SHA256
-          $line = "$($hash.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($hash.Path))"
+          $hashes = @(
+            Get-FileHash "${{ steps.artifact.outputs.msix_path }}" -Algorithm SHA256
+            Get-FileHash "${{ steps.msi_artifact.outputs.msi_path }}" -Algorithm SHA256
+          )
+          $line = $hashes | ForEach-Object { "$($_.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($_.Path))" }
           $shaPath = Join-Path (Split-Path "${{ steps.artifact.outputs.msix_path }}" -Parent) "SHA256SUMS.txt"
-          Set-Content -Path $shaPath -Value $line -NoNewline
+          Set-Content -Path $shaPath -Value $line
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -250,4 +312,5 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ steps.artifact.outputs.msix_path }}
+            ${{ steps.msi_artifact.outputs.msi_path }}
             ${{ runner.temp }}\msix\SHA256SUMS.txt

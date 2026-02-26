@@ -41,12 +41,13 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
 - Branch flow: `dev` -> `beta` -> `main`
   - `dev`: shared integration, no release publishing
   - `beta`: auto-publishes GitHub prereleases + signed MSIX
-  - `main`: auto-publishes GitHub stable releases + signed MSIX
+- `main`: auto-publishes GitHub stable releases + signed MSIX
 - Versioning:
   - Managed by Nerdbank.GitVersioning (`version.json`)
   - Pipeline computes versions automatically from Git history
   - About dialog remains aligned with assembly informational version
   - MSIX package version uses four-part format (`x.y.z.0`)
+  - Also publishes an unsigned `x64` MSI artifact for internal/manual install scenarios.
 
 ### Trigger a Beta Release
 1. Merge/promote changes from `dev` to `beta`.
@@ -91,6 +92,11 @@ git push origin beta
   - MSIX publisher: `CN=Danm@de Software`
   - package version matches release version
 - On success, prompts user and launches MSIX installer.
+
+## MSI Artifact
+- Release workflow also builds an unsigned MSI (`StorageZilla_<version>_x64_unsigned.msi`) using WiX.
+- MSI is attached to the GitHub release for manual/internal installation.
+- The MSI is intentionally unsigned and will show Windows trust warnings.
 
 ## Logging
 - Serilog file sink is enabled.

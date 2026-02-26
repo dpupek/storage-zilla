@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Storage Zilla"
+    Language="1033"
+    Version="$(var.ProductVersion)"
+    Manufacturer="Danm@de Software"
+    UpgradeCode="8C2E0CF6-FF7A-4D86-83A5-2A27D2D01E54">
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Storage Zilla is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="Storage Zilla" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Product>
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Storage Zilla" />
+      </Directory>
+    </Directory>
+  </Fragment>
+</Wix>
