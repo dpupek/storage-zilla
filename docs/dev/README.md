@@ -73,6 +73,15 @@ git push origin main
 - `MSIX_CERT_PASSWORD`: PFX password
 - `MSIX_PUBLISHER`: publisher subject (example: `CN=Danm@de Software`)
 
+If release fails at `Validate signing certificate` with an empty password or certificate-open error, rotate secrets from the same PFX export:
+```powershell
+pwsh ./tools/set-msix-secrets.ps1 -PfxPath "C:\path\to\storage-zilla-signing.pfx" -Repo "dpupek/storage-zilla" -Publisher "CN=Danm@de Software"
+```
+Then re-run beta release:
+```powershell
+git push origin beta
+```
+
 ## Auto Update (Technical)
 - Triggered manually from Help/About.
 - User-selectable channel in Settings: `Stable` (default) or `Beta`.

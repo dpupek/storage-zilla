@@ -110,8 +110,13 @@ jobs:
       - name: Prepare signing certificate
         shell: pwsh
         run: |
+          $certBase64 = "${{ secrets.MSIX_CERT_BASE64 }}"
+          if ([string]::IsNullOrWhiteSpace($certBase64)) {
+            throw "MSIX_CERT_BASE64 is empty."
+          }
+
           $certPath = Join-Path $env:RUNNER_TEMP "storage-zilla-release.pfx"
-          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String("${{ secrets.MSIX_CERT_BASE64 }}"))
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($certBase64))
           "MSIX_CERT_PATH=$certPath" >> $env:GITHUB_ENV
 
       - name: Validate signing certificate
