@@ -79,9 +79,6 @@ jobs:
       - name: Apply package publisher from secret
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.MSIX_PUBLISHER }}")) {
-            throw "MSIX_PUBLISHER secret is required."
-          }
           $manifestPath = "installer/StorageZilla.Package/Package.appxmanifest"
           [xml]$manifest = Get-Content $manifestPath
           $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
@@ -90,8 +87,16 @@ jobs:
           if ($null -eq $identity) {
             throw "Unable to find Package/Identity node in $manifestPath."
           }
-
-          $identity.SetAttribute("Publisher", "${{ secrets.MSIX_PUBLISHER }}")
+          $publisherFromSecret = "${{ secrets.MSIX_PUBLISHER }}"
+          if ([string]::IsNullOrWhiteSpace($publisherFromSecret)) {
+            $existingPublisher = $identity.GetAttribute("Publisher")
+            if ([string]::IsNullOrWhiteSpace($existingPublisher)) {
+              throw "MSIX_PUBLISHER secret is empty and Package.appxmanifest has no Publisher."
+            }
+            Write-Host "MSIX_PUBLISHER secret not set; using manifest Publisher '$existingPublisher'."
+          } else {
+            $identity.SetAttribute("Publisher", $publisherFromSecret)
+          }
           $manifest.Save($manifestPath)
 
       - name: Build signed MSIX package
