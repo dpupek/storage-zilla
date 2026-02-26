@@ -1,6 +1,6 @@
 # Storage Zilla
 
-![Storage Zilla Logo](img/storage-zilla-logo-icon.png)
+![Storage Zilla Logo](img/storage-zilla-logo.png)
 
 Storage Zilla is a Windows desktop client for Azure File Shares with an FTP-style dual-pane experience.
 
