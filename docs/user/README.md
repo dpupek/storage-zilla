@@ -2,6 +2,9 @@
 
 This section is for end users running Storage Zilla.
 
+## App Screenshot
+![Storage Zilla App Screenshot](../../img/screen.png)
+
 ## What Storage Zilla Does
 Storage Zilla gives you an FTP-style dual-pane desktop experience for Azure File Shares:
 - Browse local files and Azure file shares side-by-side

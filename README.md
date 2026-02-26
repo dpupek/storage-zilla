@@ -14,6 +14,9 @@ Core capabilities:
 - Operational safety checks and permission-aware UX
 - Signed MSIX release pipeline and in-app update checks
 
+## Screenshot
+![Storage Zilla App Screenshot](img/screen.png)
+
 ## Licensing
 Storage Zilla is dual-licensed:
 - `GPL-3.0-or-later` (open-source use and distribution under GPL terms), or

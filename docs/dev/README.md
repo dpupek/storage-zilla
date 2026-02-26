@@ -2,6 +2,9 @@
 
 This section is for contributors, maintainers, and release engineers.
 
+## Current UI Snapshot
+![Storage Zilla App Screenshot](../../img/screen.png)
+
 ## Project Layout
 - `src/AzureFilesSync.Core`: core contracts/models/services.
 - `src/AzureFilesSync.Infrastructure`: Azure auth/discovery/storage integration and update services.
