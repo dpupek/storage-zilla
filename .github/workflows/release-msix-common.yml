@@ -94,14 +94,15 @@ jobs:
             /p:VersionPrefix=${{ steps.version.outputs.base_version }} `
             /p:VersionSuffix=${{ steps.version.outputs.prerelease }}
 
-      - name: Verify assembly informational version matches computed version
+      - name: Verify assembly informational version is aligned
         shell: pwsh
         run: |
           $dll = Resolve-Path "src/AzureFilesSync.Desktop/bin/Release/net10.0-windows/AzureFilesSync.Desktop.dll"
-          $actual = (Get-Item $dll).VersionInfo.ProductVersion
-          $expected = "${{ steps.version.outputs.version }}"
-          if ($actual -ne $expected) {
-            throw "Assembly informational version mismatch. Expected '$expected' but found '$actual'."
+          $actualRaw = (Get-Item $dll).VersionInfo.ProductVersion
+          $actual = ($actualRaw -split '\+')[0]
+          $expectedBase = "${{ steps.version.outputs.base_version }}"
+          if ($actual -ne $expectedBase) {
+            throw "Assembly informational version mismatch. Expected base '$expectedBase' but found '$actualRaw'."
           }
 
       - name: Prepare signing certificate
