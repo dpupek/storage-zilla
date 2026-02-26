@@ -19,6 +19,8 @@
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <Property Id="WixUILicenseRtf" Value="installer\StorageZilla.Msi\Eula.rtf" />
+    <Property Id="WixUIDialogBmp" Value="installer\StorageZilla.Msi\Assets\WixUIDialog.bmp" />
+    <Property Id="WixUIBannerBmp" Value="installer\StorageZilla.Msi\Assets\WixUIBanner.bmp" />
     <UIRef Id="WixUI_InstallDir" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
