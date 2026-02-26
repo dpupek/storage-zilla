@@ -53,6 +53,7 @@
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_Help" Command="{Binding OpenHelpCommand}" />
+                <MenuItem Header="Check for _Updates..." Command="{Binding CheckForUpdatesCommand}" />
                 <MenuItem Header="_About" Command="{Binding ShowAboutCommand}" />
             </MenuItem>
         </Menu>
@@ -342,6 +343,10 @@
             <Separator />
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusQueueText}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock Text="{Binding UpdateStatusMessage}" />
             </StatusBarItem>
         </StatusBar>
     </Grid>

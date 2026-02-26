@@ -114,3 +114,16 @@ public interface IRemoteActionPolicyService
 {
     RemoteActionPolicy Compute(RemoteCapabilitySnapshot? capability, RemoteActionInputs inputs);
 }
+
+public interface IGitHubReleaseClient
+{
+    Task<GitHubRelease?> GetLatestStableReleaseAsync(CancellationToken cancellationToken);
+}
+
+public interface IAppUpdateService
+{
+    Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken);
+    Task<UpdateDownloadResult> DownloadUpdateAsync(UpdateCandidate candidate, IProgress<double>? progress, CancellationToken cancellationToken);
+    Task<UpdateValidationResult> ValidateDownloadedUpdateAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
+    Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
+}

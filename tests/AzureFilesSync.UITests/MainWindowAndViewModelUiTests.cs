@@ -486,7 +486,8 @@ public sealed class MainWindowAndViewModelUiTests
         IMirrorExecutionService mirrorExecutionService,
         IConnectionProfileStore profileStore,
         IRemoteCapabilityService remoteCapabilityService,
-        IRemoteActionPolicyService remoteActionPolicyService) =>
+        IRemoteActionPolicyService remoteActionPolicyService,
+        IAppUpdateService? appUpdateService = null) =>
         new(
             authenticationService,
             discoveryService,
@@ -501,7 +502,8 @@ public sealed class MainWindowAndViewModelUiTests
             mirrorExecutionService,
             profileStore,
             remoteCapabilityService,
-            remoteActionPolicyService);
+            remoteActionPolicyService,
+            appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.")));
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
     {
@@ -774,5 +776,31 @@ public sealed class MainWindowAndViewModelUiTests
                 CanEnqueueDownload: capability?.State == RemoteAccessState.Accessible && inputs.HasSelectedRemoteFile,
                 CanPlanMirror: capability?.State == RemoteAccessState.Accessible && !inputs.IsMirrorPlanning,
                 CanExecuteMirror: capability?.State == RemoteAccessState.Accessible && inputs.HasMirrorPlan);
+    }
+
+    private sealed class StubAppUpdateService : IAppUpdateService
+    {
+        private readonly UpdateCheckResult _checkResult;
+
+        public StubAppUpdateService(UpdateCheckResult checkResult)
+        {
+            _checkResult = checkResult;
+        }
+
+        public int CheckCount { get; private set; }
+
+        public Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken)
+        {
+            CheckCount++;
+            return Task.FromResult(_checkResult);
+        }
+
+        public Task<UpdateDownloadResult> DownloadUpdateAsync(UpdateCandidate candidate, IProgress<double>? progress, CancellationToken cancellationToken) =>
+            Task.FromResult(new UpdateDownloadResult(candidate, @"C:\temp\update.msix", "abc", "abc", DateTimeOffset.UtcNow));
+
+        public Task<UpdateValidationResult> ValidateDownloadedUpdateAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken) =>
+            Task.FromResult(new UpdateValidationResult(true, "CN=Danm@de Software", downloaded.Candidate.Version + ".0", null));
+
+        public Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

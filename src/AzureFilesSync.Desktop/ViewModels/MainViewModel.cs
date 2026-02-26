@@ -41,6 +41,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IConnectionProfileStore _connectionProfileStore;
     private readonly IRemoteCapabilityService _remoteCapabilityService;
     private readonly IRemoteActionPolicyService _remoteActionPolicyService;
+    private readonly IAppUpdateService _appUpdateService;
 
     private MirrorPlan? _lastMirrorPlan;
     private bool _isRestoringProfile;
@@ -160,6 +161,9 @@ public partial class MainViewModel : ObservableObject
     private string _mirrorPlanStatusMessage = string.Empty;
 
     [ObservableProperty]
+    private string _updateStatusMessage = "Updates: idle";
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(BuildMirrorPlanCommand))]
     [NotifyCanExecuteChangedFor(nameof(ExecuteMirrorCommand))]
     [NotifyCanExecuteChangedFor(nameof(EnqueueUploadCommand))]
@@ -223,7 +227,8 @@ public partial class MainViewModel : ObservableObject
         IMirrorExecutionService mirrorExecution,
         IConnectionProfileStore connectionProfileStore,
         IRemoteCapabilityService remoteCapabilityService,
-        IRemoteActionPolicyService remoteActionPolicyService)
+        IRemoteActionPolicyService remoteActionPolicyService,
+        IAppUpdateService appUpdateService)
     {
         _authenticationService = authenticationService;
         _azureDiscoveryService = azureDiscoveryService;
@@ -239,6 +244,7 @@ public partial class MainViewModel : ObservableObject
         _connectionProfileStore = connectionProfileStore;
         _remoteCapabilityService = remoteCapabilityService;
         _remoteActionPolicyService = remoteActionPolicyService;
+        _appUpdateService = appUpdateService;
 
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
         QueueItemsView.Filter = ShouldIncludeQueueItem;
@@ -565,7 +571,66 @@ public partial class MainViewModel : ObservableObject
         var version = string.IsNullOrWhiteSpace(informationalVersion)
             ? assembly.GetName().Version?.ToString() ?? "unknown"
             : informationalVersion;
-        AboutWindow.Show(Application.Current?.MainWindow, version);
+        AboutWindow.Show(Application.Current?.MainWindow, version, () => CheckForUpdatesCommand.Execute(null));
+    }
+
+    [RelayCommand]
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            UpdateStatusMessage = "Updates: checking...";
+            var check = await _appUpdateService.CheckForUpdatesAsync(CancellationToken.None);
+            if (!check.IsUpdateAvailable || check.Candidate is null)
+            {
+                UpdateStatusMessage = "Updates: no update available";
+                MessageBox.Show(check.Message, "Check for Updates", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var downloadPrompt = MessageBox.Show(
+                $"New version {check.Candidate.Version} is available (current: {check.CurrentVersion}).\n\nDownload now?",
+                "Update Available",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (downloadPrompt != MessageBoxResult.Yes)
+            {
+                UpdateStatusMessage = "Updates: update available";
+                return;
+            }
+
+            UpdateStatusMessage = "Updates: downloading...";
+            var download = await _appUpdateService.DownloadUpdateAsync(check.Candidate, progress: null, CancellationToken.None);
+            var validation = await _appUpdateService.ValidateDownloadedUpdateAsync(download, CancellationToken.None);
+            if (!validation.IsValid)
+            {
+                UpdateStatusMessage = "Updates: validation failed";
+                ErrorDialog.ShowMessage(
+                    "Update validation failed.",
+                    validation.Error ?? "The downloaded update package failed validation checks.");
+                return;
+            }
+
+            var installPrompt = MessageBox.Show(
+                $"Update {check.Candidate.Version} is ready to install.\n\nThe installer will be launched and Storage Zilla will close.\n\nContinue?",
+                "Install Update",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (installPrompt != MessageBoxResult.Yes)
+            {
+                UpdateStatusMessage = "Updates: downloaded";
+                return;
+            }
+
+            await _appUpdateService.LaunchInstallerAsync(download, CancellationToken.None);
+            UpdateStatusMessage = "Updates: installer launched";
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusMessage = "Updates: failed";
+            ShowError("Failed to check/install update.", ex);
+        }
     }
 
     [RelayCommand]

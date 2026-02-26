@@ -5,7 +5,9 @@ using AzureFilesSync.Infrastructure.Azure;
 using AzureFilesSync.Infrastructure.Config;
 using AzureFilesSync.Infrastructure.Local;
 using AzureFilesSync.Infrastructure.Transfers;
+using AzureFilesSync.Infrastructure.Updates;
 using Microsoft.Extensions.DependencyInjection;
+using System.Net.Http.Headers;
 
 namespace AzureFilesSync.Infrastructure;
 
@@ -15,8 +17,17 @@ public static class ServiceCollectionExtensions
     {
         var options = new AzureClientOptions();
         configure?.Invoke(options);
+        var updateOptions = new UpdateOptions();
 
         services.AddSingleton(options);
+        services.AddSingleton(updateOptions);
+        services.AddSingleton(sp =>
+        {
+            var httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(updateOptions.UserAgent, "1.0"));
+            httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            return httpClient;
+        });
         services.AddSingleton<IAuthenticationService, InteractiveAuthenticationService>();
         services.AddSingleton<IAzureDiscoveryService, AzureDiscoveryService>();
         services.AddSingleton<IAzureFilesBrowserService, AzureFilesBrowserService>();
@@ -33,6 +44,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITransferQueueService, TransferQueueService>();
         services.AddSingleton<IMirrorPlannerService, MirrorPlannerService>();
         services.AddSingleton<IMirrorExecutionService, MirrorExecutionService>();
+        services.AddSingleton<IGitHubReleaseClient, GitHubReleaseClient>();
+        services.AddSingleton<IAppUpdateService, AppUpdateService>();
 
         return services;
     }

@@ -1,12 +1,82 @@
-Danm@de Software Commercial License Notice
+Danm@de Software Commercial License Terms
+Storage Zilla Desktop Software
+Version 1.0
 
-This repository is available under a dual-license model:
-1) GPL-3.0-or-later (see LICENSE), or
-2) a separate commercial license.
+IMPORTANT: THIS IS A COMMERCIAL LICENSING FRAMEWORK NOTICE FOR A DUAL-LICENSE MODEL.
+USE OF THIS SOFTWARE IS PERMITTED ONLY UNDER EITHER:
+1) GPL-3.0-or-later (see LICENSE), OR
+2) A VALID COMMERCIAL AGREEMENT WITH DANM@DE SOFTWARE.
 
-If you do not wish to comply with GPL-3.0-or-later terms, you must obtain
-a commercial license before using, modifying, or distributing this software.
+If you cannot or do not want to comply with GPL terms, you must obtain a
+commercial license from Danm@de Software before use, distribution, or support.
 
-To request commercial licensing terms, contact Danm@de Software.
+1. Dual-License Model
 
-All rights reserved except as granted under the selected license.
+Storage Zilla is offered under a dual-license model similar to common
+open-core/commercial models:
+- Open source path: GPL-3.0-or-later.
+- Commercial path: proprietary commercial license with additional rights,
+  services, and entitlements.
+
+2. Commercial License Grant
+
+Subject to a signed order form or agreement and payment of applicable fees,
+Danm@de Software grants the customer a non-exclusive, non-transferable,
+limited commercial license to:
+- install and use Storage Zilla Desktop in internal business environments;
+- distribute internally within the licensed organization;
+- receive licensed update entitlements, including auto-update channel access
+  when included in the purchased plan;
+- receive support services as defined in the purchased support tier.
+
+No rights are granted except those expressly stated in the commercial agreement.
+
+3. Commercial Entitlements
+
+Commercial offerings may include:
+- Support Services:
+  - incident and troubleshooting support for licensed versions;
+  - maintenance updates and compatibility guidance;
+  - service-level targets as defined by support tier.
+- Auto-Update Capabilities:
+  - access to managed update feeds/channels;
+  - signed update packages and update metadata;
+  - rollout controls and update policy options when available.
+
+Entitlements vary by plan/SKU and are governed by the applicable agreement.
+
+4. Restrictions
+
+Unless expressly allowed by the commercial agreement, you may not:
+- sublicense, rent, lease, or resell the software;
+- remove copyright, trademark, or proprietary notices;
+- provide the auto-update service endpoints to unlicensed users;
+- use support services outside licensed environments or beyond purchased limits.
+
+5. Ownership
+
+The software, update infrastructure, support materials, documentation, and all
+intellectual property rights remain the exclusive property of Danm@de Software
+and its licensors.
+
+6. Term and Termination
+
+Commercial rights continue for the term stated in the agreement.
+Upon termination or expiration:
+- usage rights continue only as permitted by the agreement or GPL (if chosen);
+- support and auto-update access may be suspended or ended;
+- customer must cease unlicensed use.
+
+7. Warranty and Liability
+
+Except as expressly stated in a signed commercial agreement, the software and
+services are provided "as is," without warranties of any kind, to the maximum
+extent permitted by law. Liability limits and indemnity terms are defined in
+the applicable commercial contract.
+
+8. Contact and Commercial Licensing
+
+To obtain commercial terms for desktop software support services and managed
+auto-update access, contact Danm@de Software.
+
+All rights reserved except as granted under the selected license path.

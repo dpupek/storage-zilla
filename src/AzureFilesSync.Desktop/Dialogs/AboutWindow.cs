@@ -9,11 +9,14 @@ namespace AzureFilesSync.Desktop.Dialogs;
 
 public sealed class AboutWindow : Window
 {
-    private AboutWindow(string version)
+    private readonly Action? _checkForUpdates;
+
+    private AboutWindow(string version, Action? checkForUpdates)
     {
+        _checkForUpdates = checkForUpdates;
         Title = "About Storage Zilla";
         Width = 460;
-        Height = 320;
+        Height = 360;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Icon = BrandAssets.CreateAppIcon();
@@ -89,6 +92,26 @@ public sealed class AboutWindow : Window
         Grid.SetRow(detailsPanel, 3);
         root.Children.Add(detailsPanel);
 
+        var buttonPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+
+        var checkUpdates = new Button
+        {
+            Content = "Check for Updates",
+            Width = 150,
+            Margin = new Thickness(0, 0, 8, 0),
+            IsEnabled = _checkForUpdates is not null
+        };
+        checkUpdates.Click += (_, _) =>
+        {
+            DialogResult = true;
+            _checkForUpdates?.Invoke();
+        };
+        buttonPanel.Children.Add(checkUpdates);
+
         var close = new Button
         {
             Content = "Close",
@@ -97,15 +120,16 @@ public sealed class AboutWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right
         };
         close.Click += (_, _) => DialogResult = true;
-        Grid.SetRow(close, 4);
-        root.Children.Add(close);
+        buttonPanel.Children.Add(close);
+        Grid.SetRow(buttonPanel, 4);
+        root.Children.Add(buttonPanel);
 
         Content = root;
     }
 
-    public static void Show(Window? owner, string version)
+    public static void Show(Window? owner, string version, Action? checkForUpdates = null)
     {
-        var dialog = new AboutWindow(version)
+        var dialog = new AboutWindow(version, checkForUpdates)
         {
             Owner = owner
         };

@@ -68,6 +68,11 @@
 - [x] Relabel queue columns to explicit `Local` and `Remote` paths.
 - [x] Temporarily hide mirror planning/execution controls pending dedicated mirror conflict UX.
 
+## Phase 9: Update Distribution (child-0008)
+- [x] Add in-app manual update check command in Help/About.
+- [x] Add GitHub latest stable release lookup and installer asset discovery.
+- [x] Add update download + SHA256 + publisher/version validation before install launch.
+
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.
