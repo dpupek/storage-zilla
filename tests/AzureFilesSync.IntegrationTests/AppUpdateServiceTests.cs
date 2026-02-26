@@ -66,16 +66,25 @@ public sealed class AppUpdateServiceTests
     {
         #region Arrange
         const string payload = """
-        {
-          "tag_name":"v1.4.2",
-          "draft":false,
-          "prerelease":false,
-          "published_at":"2026-02-26T00:00:00Z",
-          "assets":[
-            { "name":"StorageZilla_1.4.2_x64.msix", "browser_download_url":"https://example.com/a.msix", "size": 1234 },
-            { "name":"SHA256SUMS.txt", "browser_download_url":"https://example.com/SHA256SUMS.txt", "size": 99 }
-          ]
-        }
+        [
+          {
+            "tag_name":"v1.4.2-beta.2",
+            "draft":false,
+            "prerelease":true,
+            "published_at":"2026-02-26T01:00:00Z",
+            "assets":[]
+          },
+          {
+            "tag_name":"v1.4.2",
+            "draft":false,
+            "prerelease":false,
+            "published_at":"2026-02-26T00:00:00Z",
+            "assets":[
+              { "name":"StorageZilla_1.4.2_x64.msix", "browser_download_url":"https://example.com/a.msix", "size": 1234 },
+              { "name":"SHA256SUMS.txt", "browser_download_url":"https://example.com/SHA256SUMS.txt", "size": 99 }
+            ]
+          }
+        ]
         """;
         var client = new HttpClient(new StubHttpMessageHandler(payload))
         {
@@ -89,7 +98,7 @@ public sealed class AppUpdateServiceTests
         #endregion
 
         #region Act
-        var release = await releaseClient.GetLatestStableReleaseAsync(CancellationToken.None);
+        var release = await releaseClient.GetLatestReleaseAsync(UpdateChannel.Stable, CancellationToken.None);
         #endregion
 
         #region Assert
@@ -97,6 +106,53 @@ public sealed class AppUpdateServiceTests
         Assert.Equal("v1.4.2", release!.TagName);
         Assert.Equal(2, release.Assets.Count);
         Assert.Contains(release.Assets, x => x.Name.EndsWith(".msix", StringComparison.OrdinalIgnoreCase));
+        #endregion
+    }
+
+    [Fact]
+    public async Task GitHubReleaseClient_ParsesLatestBetaRelease()
+    {
+        #region Arrange
+        const string payload = """
+        [
+          {
+            "tag_name":"v1.4.2-beta.1",
+            "draft":false,
+            "prerelease":true,
+            "published_at":"2026-02-26T00:00:00Z",
+            "assets":[]
+          },
+          {
+            "tag_name":"v1.4.2-beta.3",
+            "draft":false,
+            "prerelease":true,
+            "published_at":"2026-02-26T03:00:00Z",
+            "assets":[
+              { "name":"StorageZilla_1.4.2-beta.3_x64.msix", "browser_download_url":"https://example.com/b.msix", "size": 2222 },
+              { "name":"SHA256SUMS.txt", "browser_download_url":"https://example.com/SHA256SUMS.txt", "size": 99 }
+            ]
+          }
+        ]
+        """;
+        var client = new HttpClient(new StubHttpMessageHandler(payload))
+        {
+            BaseAddress = new Uri("https://api.github.com/")
+        };
+        var releaseClient = new GitHubReleaseClient(client, new UpdateOptions());
+        #endregion
+
+        #region Initial Assert
+        Assert.NotNull(releaseClient);
+        #endregion
+
+        #region Act
+        var release = await releaseClient.GetLatestReleaseAsync(UpdateChannel.Beta, CancellationToken.None);
+        #endregion
+
+        #region Assert
+        Assert.NotNull(release);
+        Assert.Equal("v1.4.2-beta.3", release!.TagName);
+        Assert.True(release.IsPrerelease);
         #endregion
     }
 
@@ -125,7 +181,7 @@ public sealed class AppUpdateServiceTests
 
     private sealed class StubReleaseClient : Core.Contracts.IGitHubReleaseClient
     {
-        public Task<GitHubRelease?> GetLatestStableReleaseAsync(CancellationToken cancellationToken) =>
+        public Task<GitHubRelease?> GetLatestReleaseAsync(UpdateChannel channel, CancellationToken cancellationToken) =>
             Task.FromResult<GitHubRelease?>(null);
     }
 

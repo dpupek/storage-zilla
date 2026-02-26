@@ -12,7 +12,7 @@ Core capabilities:
 - Dual-pane local/remote browsing
 - Queue-based upload/download with conflict policies
 - Operational safety checks and permission-aware UX
-- Signed MSIX release pipeline and in-app update checks
+- Signed MSIX release pipelines for beta/prod channels and in-app update checks
 
 ## Screenshot
 ![Storage Zilla App Screenshot](img/screen.png)

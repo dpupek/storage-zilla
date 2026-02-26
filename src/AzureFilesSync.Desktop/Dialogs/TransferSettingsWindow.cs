@@ -12,21 +12,25 @@ public sealed class TransferSettingsWindow : Window
     private readonly TextBox _throttleKbBox;
     private readonly ComboBox _uploadConflictPolicyBox;
     private readonly ComboBox _downloadConflictPolicyBox;
+    private readonly ComboBox _updateChannelBox;
 
     private TransferSettingsWindow(
         int currentConcurrency,
         int currentThrottleKb,
         TransferConflictPolicy currentUploadConflictPolicy,
-        TransferConflictPolicy currentDownloadConflictPolicy)
+        TransferConflictPolicy currentDownloadConflictPolicy,
+        UpdateChannel currentUpdateChannel)
     {
         Title = "Transfer Settings";
         Width = 440;
-        Height = 410;
+        Height = 470;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
         Icon = BrandAssets.CreateAppIcon();
 
         var root = new Grid { Margin = new Thickness(12) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -136,6 +140,23 @@ public sealed class TransferSettingsWindow : Window
         Grid.SetRow(_downloadConflictPolicyBox, 8);
         root.Children.Add(_downloadConflictPolicyBox);
 
+        var updateChannelLabel = new TextBlock
+        {
+            Text = "Auto-update channel:",
+            Margin = new Thickness(0, 12, 0, 6)
+        };
+        Grid.SetRow(updateChannelLabel, 9);
+        root.Children.Add(updateChannelLabel);
+
+        _updateChannelBox = new ComboBox
+        {
+            MinWidth = 380,
+            ItemsSource = Enum.GetValues<UpdateChannel>(),
+            SelectedItem = currentUpdateChannel
+        };
+        Grid.SetRow(_updateChannelBox, 10);
+        root.Children.Add(_updateChannelBox);
+
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -147,7 +168,7 @@ public sealed class TransferSettingsWindow : Window
         var cancel = new Button { Content = "Cancel", Width = 90, Margin = new Thickness(8, 0, 0, 0), IsCancel = true };
         buttons.Children.Add(ok);
         buttons.Children.Add(cancel);
-        Grid.SetRow(buttons, 9);
+        Grid.SetRow(buttons, 11);
         root.Children.Add(buttons);
 
         Content = root;
@@ -162,6 +183,7 @@ public sealed class TransferSettingsWindow : Window
     public int MaxThrottleKilobytesPerSecond { get; private set; }
     public TransferConflictPolicy UploadConflictPolicy { get; private set; }
     public TransferConflictPolicy DownloadConflictPolicy { get; private set; }
+    public UpdateChannel UpdateChannel { get; private set; }
 
     public static bool TryShow(
         Window owner,
@@ -169,16 +191,19 @@ public sealed class TransferSettingsWindow : Window
         int currentThrottleKb,
         TransferConflictPolicy currentUploadConflictPolicy,
         TransferConflictPolicy currentDownloadConflictPolicy,
+        UpdateChannel currentUpdateChannel,
         out int newConcurrency,
         out int newThrottleKb,
         out TransferConflictPolicy uploadConflictPolicy,
-        out TransferConflictPolicy downloadConflictPolicy)
+        out TransferConflictPolicy downloadConflictPolicy,
+        out UpdateChannel updateChannel)
     {
         var dialog = new TransferSettingsWindow(
             currentConcurrency,
             currentThrottleKb,
             currentUploadConflictPolicy,
-            currentDownloadConflictPolicy)
+            currentDownloadConflictPolicy,
+            currentUpdateChannel)
         {
             Owner = owner
         };
@@ -189,6 +214,7 @@ public sealed class TransferSettingsWindow : Window
             newThrottleKb = dialog.MaxThrottleKilobytesPerSecond;
             uploadConflictPolicy = dialog.UploadConflictPolicy;
             downloadConflictPolicy = dialog.DownloadConflictPolicy;
+            updateChannel = dialog.UpdateChannel;
             return true;
         }
 
@@ -196,6 +222,7 @@ public sealed class TransferSettingsWindow : Window
         newThrottleKb = currentThrottleKb;
         uploadConflictPolicy = currentUploadConflictPolicy;
         downloadConflictPolicy = currentDownloadConflictPolicy;
+        updateChannel = currentUpdateChannel;
         return false;
     }
 
@@ -221,6 +248,9 @@ public sealed class TransferSettingsWindow : Window
         DownloadConflictPolicy = _downloadConflictPolicyBox.SelectedItem is TransferConflictPolicy download
             ? download
             : TransferConflictPolicy.Ask;
+        UpdateChannel = _updateChannelBox.SelectedItem is UpdateChannel channel
+            ? channel
+            : UpdateChannel.Stable;
         DialogResult = true;
     }
 }

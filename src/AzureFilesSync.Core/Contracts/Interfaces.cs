@@ -117,11 +117,13 @@ public interface IRemoteActionPolicyService
 
 public interface IGitHubReleaseClient
 {
-    Task<GitHubRelease?> GetLatestStableReleaseAsync(CancellationToken cancellationToken);
+    Task<GitHubRelease?> GetLatestReleaseAsync(UpdateChannel channel, CancellationToken cancellationToken);
 }
 
 public interface IAppUpdateService
 {
+    UpdateChannel CurrentChannel { get; }
+    void SetChannel(UpdateChannel channel);
     Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken);
     Task<UpdateDownloadResult> DownloadUpdateAsync(UpdateCandidate candidate, IProgress<double>? progress, CancellationToken cancellationToken);
     Task<UpdateValidationResult> ValidateDownloadedUpdateAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);

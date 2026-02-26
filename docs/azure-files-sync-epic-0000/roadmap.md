@@ -27,8 +27,8 @@
 - [x] Add richer error categorization.
 - [x] Add bandwidth throttling and per-job concurrency controls.
 - [x] Add packaging and installer profile.
-- [x] Add release pipeline that builds/signs MSIX on `v1.x.x` tags and publishes GitHub releases.
-- [x] Align About dialog version display with release tag version.
+- [x] Add branch-based release pipelines for `beta` (prerelease) and `main` (stable) with signed MSIX publishing.
+- [x] Align About dialog version display with computed build version metadata.
 
 ## Phase 7: Live Integration Coverage (child-0006)
 - [x] Add env-gated live Azure Files upload/download integration test.
@@ -72,6 +72,7 @@
 - [x] Add in-app manual update check command in Help/About.
 - [x] Add GitHub latest stable release lookup and installer asset discovery.
 - [x] Add update download + SHA256 + publisher/version validation before install launch.
+- [x] Add update channel selection (`Stable`/`Beta`) and persist it in profile/settings.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.

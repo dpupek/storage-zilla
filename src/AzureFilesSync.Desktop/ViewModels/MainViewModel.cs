@@ -116,6 +116,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private TransferConflictPolicy _downloadConflictDefaultPolicy = TransferConflictPolicy.Ask;
 
+    [ObservableProperty]
+    private UpdateChannel _updateChannel = UpdateChannel.Stable;
+
     public int TransferMaxKilobytesPerSecond
     {
         get => TransferMaxBytesPerSecond <= 0 ? 0 : Math.Max(1, TransferMaxBytesPerSecond / 1024);
@@ -245,6 +248,7 @@ public partial class MainViewModel : ObservableObject
         _remoteCapabilityService = remoteCapabilityService;
         _remoteActionPolicyService = remoteActionPolicyService;
         _appUpdateService = appUpdateService;
+        UpdateChannel = _appUpdateService.CurrentChannel;
 
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
         QueueItemsView.Filter = ShouldIncludeQueueItem;
@@ -536,10 +540,12 @@ public partial class MainViewModel : ObservableObject
                 TransferMaxKilobytesPerSecond,
                 UploadConflictDefaultPolicy,
                 DownloadConflictDefaultPolicy,
+                UpdateChannel,
                 out var newConcurrency,
                 out var newThrottleKb,
                 out var uploadConflictPolicy,
-                out var downloadConflictPolicy))
+                out var downloadConflictPolicy,
+                out var updateChannel))
         {
             return;
         }
@@ -548,6 +554,7 @@ public partial class MainViewModel : ObservableObject
         TransferMaxKilobytesPerSecond = newThrottleKb;
         UploadConflictDefaultPolicy = uploadConflictPolicy;
         DownloadConflictDefaultPolicy = downloadConflictPolicy;
+        UpdateChannel = updateChannel;
     }
 
     [RelayCommand]
@@ -929,6 +936,7 @@ public partial class MainViewModel : ObservableObject
             TransferMaxBytesPerSecond = NormalizeTransferMaxBytesPerSecond(profile.TransferMaxBytesPerSecond);
             UploadConflictDefaultPolicy = NormalizeConflictPolicy(profile.UploadConflictDefaultPolicy);
             DownloadConflictDefaultPolicy = NormalizeConflictPolicy(profile.DownloadConflictDefaultPolicy);
+            UpdateChannel = profile.UpdateChannel;
             LocalGridLayout = profile.LocalGridLayout;
             RemoteGridLayout = profile.RemoteGridLayout;
             ReplaceCollection(RecentLocalPaths, profile.RecentLocalPaths, includeIfEmpty: LocalPath);
@@ -1007,7 +1015,8 @@ public partial class MainViewModel : ObservableObject
             RecentLocalPaths.ToList(),
             RecentRemotePaths.ToList(),
             LocalGridLayout,
-            RemoteGridLayout);
+            RemoteGridLayout,
+            UpdateChannel);
 
         await _connectionProfileStore.SaveAsync(profile, CancellationToken.None);
     }
@@ -1417,6 +1426,12 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnDownloadConflictDefaultPolicyChanged(TransferConflictPolicy value)
     {
+        _ = PersistProfileAsync();
+    }
+
+    partial void OnUpdateChannelChanged(UpdateChannel value)
+    {
+        _appUpdateService.SetChannel(value);
         _ = PersistProfileAsync();
     }
 

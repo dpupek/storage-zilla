@@ -1,5 +1,11 @@
 namespace AzureFilesSync.Core.Models;
 
+public enum UpdateChannel
+{
+    Stable = 0,
+    Beta = 1
+}
+
 public enum UpdateStatus
 {
     Idle,

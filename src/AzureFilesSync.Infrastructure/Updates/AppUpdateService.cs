@@ -15,25 +15,37 @@ public sealed class AppUpdateService : IAppUpdateService
     private readonly HttpClient _httpClient;
     private readonly UpdateOptions _options;
     private readonly string _updateRoot;
+    private UpdateChannel _currentChannel;
 
     public AppUpdateService(IGitHubReleaseClient releaseClient, HttpClient httpClient, UpdateOptions options)
     {
         _releaseClient = releaseClient;
         _httpClient = httpClient;
         _options = options;
+        _currentChannel = options.DefaultChannel;
         _updateRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AzureFilesSync",
             "updates");
     }
 
+    public UpdateChannel CurrentChannel => _currentChannel;
+
+    public void SetChannel(UpdateChannel channel)
+    {
+        _currentChannel = channel == UpdateChannel.Beta && !_options.AllowBetaChannel
+            ? UpdateChannel.Stable
+            : channel;
+    }
+
     public async Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken)
     {
         var currentVersion = GetCurrentVersion();
-        var release = await _releaseClient.GetLatestStableReleaseAsync(cancellationToken).ConfigureAwait(false);
+        var release = await _releaseClient.GetLatestReleaseAsync(_currentChannel, cancellationToken).ConfigureAwait(false);
         if (release is null)
         {
-            return new UpdateCheckResult(currentVersion, null, false, null, "Unable to retrieve the latest stable release.");
+            var channelLabel = _currentChannel == UpdateChannel.Beta ? "beta" : "stable";
+            return new UpdateCheckResult(currentVersion, null, false, null, $"Unable to retrieve the latest {channelLabel} release.");
         }
 
         var latestVersion = NormalizeTagToVersion(release.TagName);

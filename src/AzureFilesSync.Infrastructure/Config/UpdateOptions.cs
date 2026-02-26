@@ -1,3 +1,5 @@
+using AzureFilesSync.Core.Models;
+
 namespace AzureFilesSync.Infrastructure.Config;
 
 public sealed class UpdateOptions
@@ -8,4 +10,6 @@ public sealed class UpdateOptions
     public string ReleaseAssetExtension { get; set; } = ".msix";
     public string Sha256FileName { get; set; } = "SHA256SUMS.txt";
     public string UserAgent { get; set; } = "StorageZilla-Desktop-Updater";
+    public UpdateChannel DefaultChannel { get; set; } = UpdateChannel.Stable;
+    public bool AllowBetaChannel { get; set; } = true;
 }

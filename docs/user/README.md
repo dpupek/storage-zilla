@@ -30,7 +30,10 @@ Storage Zilla shows permission issues as an informational message in the remote 
 
 ## Auto Update
 - Open `Help -> Check for Updates...` (or use the button in About).
-- Storage Zilla checks the latest stable GitHub release.
+- Choose update channel in `Tools -> Settings`:
+  - `Stable` (default): production releases from `main`
+  - `Beta`: prerelease builds from `beta`
+- Storage Zilla checks the latest release in your selected channel.
 - If an update is available and validated, you will be prompted to install.
 
 ## Support and Licensing

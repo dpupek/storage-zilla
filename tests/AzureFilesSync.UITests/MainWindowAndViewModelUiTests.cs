@@ -788,6 +788,12 @@ public sealed class MainWindowAndViewModelUiTests
         }
 
         public int CheckCount { get; private set; }
+        public UpdateChannel CurrentChannel { get; private set; } = UpdateChannel.Stable;
+
+        public void SetChannel(UpdateChannel channel)
+        {
+            CurrentChannel = channel;
+        }
 
         public Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken)
         {

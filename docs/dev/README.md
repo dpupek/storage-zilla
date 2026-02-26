@@ -35,18 +35,17 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
 
 ## Installer and Release Pipeline
 - Packaging project: `installer/StorageZilla.Package/StorageZilla.Package.wapproj`
-- Release workflow: `.github/workflows/release-msix.yml`
-- Release tags: `v1.x.x` (example: `v1.4.2`)
-- Version consistency:
-  - Tag `v1.4.2` maps to app version `1.4.2`
-  - About dialog shows aligned version
-  - MSIX package version uses four-part format (`1.4.2.0`)
-
-Create release tag:
-```powershell
-git tag v1.4.2
-git push origin v1.4.2
-```
+- Beta workflow: `.github/workflows/release-beta.yml` (`push` to `beta`)
+- Prod workflow: `.github/workflows/release-prod.yml` (`push` to `main`)
+- Branch flow: `dev` -> `beta` -> `main`
+  - `dev`: shared integration, no release publishing
+  - `beta`: auto-publishes GitHub prereleases + signed MSIX
+  - `main`: auto-publishes GitHub stable releases + signed MSIX
+- Versioning:
+  - Managed by Nerdbank.GitVersioning (`version.json`)
+  - Pipeline computes versions automatically from Git history
+  - About dialog remains aligned with assembly informational version
+  - MSIX package version uses four-part format (`x.y.z.0`)
 
 ### GitHub Secrets for Release
 - `MSIX_CERT_BASE64`: base64 PFX certificate
@@ -55,7 +54,8 @@ git push origin v1.4.2
 
 ## Auto Update (Technical)
 - Triggered manually from Help/About.
-- Checks latest stable GitHub release (`dpupek/storage-zilla`).
+- User-selectable channel in Settings: `Stable` (default) or `Beta`.
+- Checks latest matching GitHub release (`dpupek/storage-zilla`) by channel.
 - Verifies:
   - SHA256 from `SHA256SUMS.txt`
   - MSIX publisher: `CN=Danm@de Software`

@@ -27,7 +27,8 @@ public sealed record ConnectionProfile(
     IReadOnlyList<string> RecentLocalPaths,
     IReadOnlyList<string> RecentRemotePaths,
     GridLayoutProfile? LocalGridLayout = null,
-    GridLayoutProfile? RemoteGridLayout = null)
+    GridLayoutProfile? RemoteGridLayout = null,
+    UpdateChannel UpdateChannel = UpdateChannel.Stable)
 {
     public static ConnectionProfile Empty(string defaultLocalPath) =>
         new(
@@ -44,5 +45,6 @@ public sealed record ConnectionProfile(
             [defaultLocalPath],
             [],
             null,
-            null);
+            null,
+            UpdateChannel.Stable);
 }
