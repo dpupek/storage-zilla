@@ -304,26 +304,26 @@ jobs:
           New-Item -ItemType Directory -Path $notesOutDir -Force | Out-Null
           $notesPath = Join-Path $notesOutDir "RELEASE-NOTES.md"
           $channel = "${{ inputs.channel }}"
-          $notes = @"
-# Storage Zilla Release Notes
-
-## Release
-- Version: `${{ steps.version.outputs.version }}`
-- Tag: `${{ steps.version.outputs.tag }}`
-- Channel: $channel
-
-## Artifacts
-- Signed MSIX package
-- Unsigned MSI package
-- SHA256 checksums (`SHA256SUMS.txt`)
-- Public signing certificate (`StorageZilla-Signing-PublicKey.cer`)
-
-## Trust
-- Certificate Subject: $env:MSIX_CERT_SUBJECT
-- Certificate Thumbprint: $env:MSIX_CERT_THUMBPRINT
-- Certificate Expiration (UTC): $env:MSIX_CERT_NOT_AFTER
-"@
-          Set-Content -Path $notesPath -Value $notes -Encoding UTF8
+          $lines = @(
+            "# Storage Zilla Release Notes"
+            ""
+            "## Release"
+            "- Version: `${{ steps.version.outputs.version }}`"
+            "- Tag: `${{ steps.version.outputs.tag }}`"
+            "- Channel: $channel"
+            ""
+            "## Artifacts"
+            "- Signed MSIX package"
+            "- Unsigned MSI package"
+            "- SHA256 checksums (`SHA256SUMS.txt`)"
+            "- Public signing certificate (`StorageZilla-Signing-PublicKey.cer`)"
+            ""
+            "## Trust"
+            "- Certificate Subject: $env:MSIX_CERT_SUBJECT"
+            "- Certificate Thumbprint: $env:MSIX_CERT_THUMBPRINT"
+            "- Certificate Expiration (UTC): $env:MSIX_CERT_NOT_AFTER"
+          )
+          Set-Content -Path $notesPath -Value $lines -Encoding UTF8
           "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
 
       - name: Resolve MSIX artifact
