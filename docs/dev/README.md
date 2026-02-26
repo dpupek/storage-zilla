@@ -48,6 +48,7 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
   - About dialog remains aligned with assembly informational version
   - MSIX package version uses four-part format (`x.y.z.0`)
   - Also publishes an unsigned `x64` MSI artifact for internal/manual install scenarios.
+  - Also publishes a portable `win-x64` ZIP package with self-contained binaries.
   - Also publishes a public signing certificate (`StorageZilla-Signing-PublicKey.cer`) and `RELEASE-NOTES.md`.
 
 ### Trigger a Beta Release
@@ -99,10 +100,15 @@ git push origin beta
 - MSI is attached to the GitHub release for manual/internal installation.
 - The MSI is intentionally unsigned and will show Windows trust warnings.
 
+## Portable ZIP Artifact
+- Release workflow also builds a portable ZIP (`StorageZilla_<version>_win-x64_portable.zip`) from the published desktop payload.
+- ZIP is attached to the GitHub release for no-installer execution scenarios.
+- ZIP includes runtime dependencies and binaries from `dotnet publish` output.
+
 ## Release Trust + Notes Artifacts
 - `StorageZilla-Signing-PublicKey.cer`: public certificate for trust/import workflows.
 - `RELEASE-NOTES.md`: release metadata and trust details (subject/thumbprint/expiration).
-- `SHA256SUMS.txt` includes checksums for MSIX, MSI, and CER assets.
+- `SHA256SUMS.txt` includes checksums for MSIX, MSI, ZIP, and CER assets.
 
 ## Logging
 - Serilog file sink is enabled.

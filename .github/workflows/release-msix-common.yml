@@ -286,6 +286,20 @@ jobs:
 
           "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
 
+      - name: Build portable zip package
+        id: zip_artifact
+        shell: pwsh
+        run: |
+          $zipOutDir = Join-Path $env:RUNNER_TEMP "zip"
+          New-Item -ItemType Directory -Path $zipOutDir -Force | Out-Null
+          $zipPath = Join-Path $zipOutDir "StorageZilla_${{ steps.version.outputs.version }}_win-x64_portable.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path (Join-Path "$env:MSI_PUBLISH_DIR" '*') -DestinationPath $zipPath -CompressionLevel Optimal
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+
       - name: Export public signing certificate
         id: cert_artifact
         shell: pwsh
@@ -315,6 +329,7 @@ jobs:
             "## Artifacts"
             "- Signed MSIX package"
             "- Unsigned MSI package"
+            "- Portable ZIP package (self-contained binaries)"
             "- SHA256 checksums (SHA256SUMS.txt)"
             "- Public signing certificate (StorageZilla-Signing-PublicKey.cer)"
             ""
@@ -342,6 +357,7 @@ jobs:
           $hashes = @(
             Get-FileHash "${{ steps.artifact.outputs.msix_path }}" -Algorithm SHA256
             Get-FileHash "${{ steps.msi_artifact.outputs.msi_path }}" -Algorithm SHA256
+            Get-FileHash "${{ steps.zip_artifact.outputs.zip_path }}" -Algorithm SHA256
             Get-FileHash "${{ steps.cert_artifact.outputs.cer_path }}" -Algorithm SHA256
           )
           $line = $hashes | ForEach-Object { "$($_.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($_.Path))" }
@@ -359,6 +375,7 @@ jobs:
           files: |
             ${{ steps.artifact.outputs.msix_path }}
             ${{ steps.msi_artifact.outputs.msi_path }}
+            ${{ steps.zip_artifact.outputs.zip_path }}
             ${{ steps.cert_artifact.outputs.cer_path }}
             ${{ steps.notes_artifact.outputs.notes_path }}
             ${{ runner.temp }}\msix\SHA256SUMS.txt
