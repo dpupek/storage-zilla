@@ -47,6 +47,11 @@ public sealed class InteractiveAuthenticationService : IAuthenticationService
         {
             TenantId = _options.TenantId,
             RedirectUri = new Uri(_options.RedirectUri),
+            BrowserCustomization = new BrowserCustomizationOptions
+            {
+                UseEmbeddedWebView = true,
+                SuccessMessage = "<html><body><h2>Sign-in complete.</h2><p>You can close this window and return to Storage Zilla.</p></body></html>"
+            },
             TokenCachePersistenceOptions = new TokenCachePersistenceOptions
             {
                 Name = "AzureFilesSyncTokenCache",

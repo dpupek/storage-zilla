@@ -13,6 +13,7 @@ using System.Collections;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Data;
@@ -887,24 +888,63 @@ public partial class MainViewModel : ObservableObject
                 }
             }
         }
-        catch (RequestFailedException ex)
+        catch (Exception ex)
         {
             RemoteEntries.Clear();
             RemoteGridEntries.Clear();
-            var capability = _remoteCapabilityService.GetLastKnown(BuildRemoteContext())
-                ?? new RemoteCapabilitySnapshot(
-                    RemoteAccessState.Unknown,
+            var requestFailed = TryFindRequestFailedException(ex);
+            if (IsDnsResolutionFailure(ex))
+            {
+                Log.Warning(ex, "Cannot resolve Azure Files endpoint for storage account {StorageAccountName}", account.Name);
+                var message =
+                    $"Cannot resolve '{account.Name}.file.core.windows.net'. " +
+                    "This storage account may require private DNS/VPN/network routing to a private endpoint.";
+                ApplyCapability(new RemoteCapabilitySnapshot(
+                    RemoteAccessState.TransientFailure,
                     false,
                     false,
                     false,
                     false,
                     false,
-                    $"Cannot list shares for '{account.Name}' (HTTP {ex.Status}).",
+                    message,
                     DateTimeOffset.UtcNow,
-                    ex.ErrorCode,
-                    ex.Status);
-            ApplyCapability(capability with { UserMessage = $"Cannot list shares for '{account.Name}' (HTTP {ex.Status}). Verify Azure Files data access." });
-            LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' ({ex.Status}).";
+                    requestFailed?.ErrorCode,
+                    requestFailed?.Status > 0 ? requestFailed.Status : null));
+                LoginStatus = $"Signed in. Storage account '{account.Name}' is currently unreachable (DNS/network).";
+                return;
+            }
+
+            if (requestFailed is not null)
+            {
+                var capability = _remoteCapabilityService.GetLastKnown(BuildRemoteContext())
+                    ?? new RemoteCapabilitySnapshot(
+                        RemoteAccessState.Unknown,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        $"Cannot list shares for '{account.Name}' (HTTP {requestFailed.Status}).",
+                        DateTimeOffset.UtcNow,
+                        requestFailed.ErrorCode,
+                        requestFailed.Status);
+                ApplyCapability(capability with { UserMessage = $"Cannot list shares for '{account.Name}' (HTTP {requestFailed.Status}). Verify Azure Files data access." });
+                LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' ({requestFailed.Status}).";
+                Log.Warning(ex, "Cannot list shares for storage account {StorageAccountName} due to Azure request failure.", account.Name);
+                return;
+            }
+
+            Log.Warning(ex, "Cannot list shares for storage account {StorageAccountName} due to unexpected error.", account.Name);
+            ApplyCapability(new RemoteCapabilitySnapshot(
+                RemoteAccessState.TransientFailure,
+                false,
+                false,
+                false,
+                false,
+                false,
+                $"Cannot list shares for '{account.Name}'. Check connectivity and try Refresh.",
+                DateTimeOffset.UtcNow));
+            LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' due to a connectivity error.";
             return;
         }
 
@@ -919,6 +959,58 @@ public partial class MainViewModel : ObservableObject
 
         cancellationToken.ThrowIfCancellationRequested();
         await LoadRemoteDirectoryAsync();
+    }
+
+    private static RequestFailedException? TryFindRequestFailedException(Exception ex)
+    {
+        if (ex is RequestFailedException direct)
+        {
+            return direct;
+        }
+
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.Flatten().InnerExceptions)
+            {
+                if (inner is RequestFailedException requestFailed)
+                {
+                    return requestFailed;
+                }
+            }
+        }
+
+        return ex.InnerException is null ? null : TryFindRequestFailedException(ex.InnerException);
+    }
+
+    private static bool IsDnsResolutionFailure(Exception ex)
+    {
+        if (ex is System.Net.Sockets.SocketException socket &&
+            socket.SocketErrorCode == System.Net.Sockets.SocketError.HostNotFound)
+        {
+            return true;
+        }
+
+        if (ex is HttpRequestException http && http.InnerException is not null)
+        {
+            return IsDnsResolutionFailure(http.InnerException);
+        }
+
+        if (ex is RequestFailedException requestFailed)
+        {
+            if (requestFailed.InnerException is not null && IsDnsResolutionFailure(requestFailed.InnerException))
+            {
+                return true;
+            }
+
+            return requestFailed.Message.Contains("No such host is known", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (ex is AggregateException aggregate)
+        {
+            return aggregate.Flatten().InnerExceptions.Any(IsDnsResolutionFailure);
+        }
+
+        return ex.InnerException is not null && IsDnsResolutionFailure(ex.InnerException);
     }
 
     private async Task LoadLocalProfileDefaultsAsync()
