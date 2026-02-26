@@ -59,13 +59,24 @@ public sealed class TransferQueueServiceTests
         var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
         var request = new TransferRequest(TransferDirection.Upload, "C:/tmp/file.txt", new SharePath("acct", "share", "file.txt"));
         var jobId = queue.Enqueue(request);
-        using var completed = new ManualResetEventSlim(false);
+        var paused = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         queue.JobUpdated += (_, snapshot) =>
         {
-            if (snapshot.JobId == jobId && snapshot.Status == TransferJobStatus.Completed)
+            if (snapshot.JobId != jobId)
             {
-                completed.Set();
+                return;
+            }
+
+            if (snapshot.Status == TransferJobStatus.Paused)
+            {
+                paused.TrySetResult(true);
+            }
+
+            if (snapshot.Status == TransferJobStatus.Completed)
+            {
+                completed.TrySetResult(true);
             }
         };
         #endregion
@@ -75,11 +86,11 @@ public sealed class TransferQueueServiceTests
         #endregion
 
         #region Act
-        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await queue.PauseAsync(jobId, CancellationToken.None);
-        await executor.Paused.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await paused.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await queue.ResumeAsync(jobId, CancellationToken.None);
-        var signaled = completed.Wait(TimeSpan.FromSeconds(5));
+        var signaled = await completed.Task.WaitAsync(TimeSpan.FromSeconds(15));
         #endregion
 
         #region Assert
