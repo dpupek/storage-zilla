@@ -154,11 +154,21 @@ jobs:
               throw "PFX certificate is expired as of $($cert.NotAfter.ToString('u'))."
             }
 
-            Write-Host "Signing certificate validated. Subject: $($cert.Subject); Thumbprint: $($cert.Thumbprint)"
+            $thumbprint = $cert.Thumbprint
+            Write-Host "Signing certificate validated. Subject: $($cert.Subject); Thumbprint: $thumbprint"
+            "MSIX_CERT_THUMBPRINT=$thumbprint" >> $env:GITHUB_ENV
             $cert.Dispose()
           } catch {
             throw "Unable to open MSIX signing certificate. Verify MSIX_CERT_BASE64 and MSIX_CERT_PASSWORD were created from the same PFX export. Details: $($_.Exception.Message)"
           }
+
+      - name: Import signing certificate into CurrentUser store
+        shell: pwsh
+        env:
+          MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
+        run: |
+          $securePassword = ConvertTo-SecureString $env:MSIX_CERT_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $env:MSIX_CERT_PATH -Password $securePassword -CertStoreLocation "Cert:\CurrentUser\My" | Out-Null
 
       - name: Apply package publisher from secret
         shell: pwsh
@@ -201,8 +211,9 @@ jobs:
             "/p:UapAppxPackageBuildMode=SideLoadOnly"
             "/p:AppxPackageDir=$packageDir\\"
             "/p:AppxPackageSigningEnabled=true"
-            "/p:PackageCertificateKeyFile=$env:MSIX_CERT_PATH"
-            "/p:PackageCertificatePassword=$env:MSIX_CERT_PASSWORD"
+            "/p:PackageCertificateThumbprint=$env:MSIX_CERT_THUMBPRINT"
+            "/p:PackageCertificateStoreName=My"
+            "/p:PackageCertificateStoreLocation=CurrentUser"
             "/p:AppxPackageVersion=${{ steps.version.outputs.base_version }}.0"
             "/p:RuntimeIdentifier=win-x64"
             "/p:SelfContained=true"
