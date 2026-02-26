@@ -154,7 +154,7 @@ jobs:
             /p:RuntimeIdentifier=win-x64 `
             /p:SelfContained=true `
             /p:VersionPrefix=${{ steps.version.outputs.base_version }} `
-            /p:VersionSuffix=${{ steps.version.outputs.prerelease }}
+            /p:VersionSuffix=
 
       - name: Resolve MSIX artifact
         id: artifact
