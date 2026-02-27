@@ -36,7 +36,7 @@
   <Fragment>
     <Property Id="MSIX_PACKAGE_FOLDER">
       <DirectorySearch Id="SearchWindowsAppsRoot" Path="[ProgramFilesFolder]WindowsApps">
-        <DirectorySearch Id="SearchStorageZillaMsixFolder" Name="StorageZilla.Desktop_*" />
+        <DirectorySearch Id="SearchStorageZillaMsixFolder" Path="StorageZilla.Desktop_*" />
       </DirectorySearch>
     </Property>
   </Fragment>
