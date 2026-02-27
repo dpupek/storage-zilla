@@ -5,9 +5,10 @@ Motivation: Use Azure Files like an FTP client without scripting.
 
 ## Flow 1: Sign In and Discover
 1. Open app and click Sign In.
-2. Complete interactive browser login.
+2. Complete interactive login (WAM broker when available, otherwise system browser fallback).
 3. Select subscription, storage account, and file share using labeled selectors.
 4. Verify status bar shows signed-in identity and current transfer tuning (throttle/concurrency).
+5. If a saved share endpoint is unavailable (for example DNS/network issue), keep the session signed in and show a recoverable selector-level message while allowing account/share reselection.
 
 Linked cases: epic-0000, child-0001
 

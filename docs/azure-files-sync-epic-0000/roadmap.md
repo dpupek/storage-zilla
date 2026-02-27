@@ -9,6 +9,8 @@
 - [x] Implement interactive auth service.
 - [x] Implement subscription/storage/file share discovery.
 - [x] Wire left/right pane directory loaders.
+- [x] Add WAM-first sign-in with automatic system-browser fallback when broker prerequisites are unavailable.
+- [x] Keep sign-in session active when profile restore hits DNS-unreachable or unavailable Azure Files endpoints; show a friendly non-blocking message instead of failing the entire sign-in.
 
 ## Phase 3: Transfer Queue (child-0002)
 - [x] Implement transfer queue service.
@@ -73,6 +75,8 @@
 - [x] Replace static help popup with embedded in-app help docs viewer.
 - [x] Ensure embedded help supports internal doc navigation and local image rendering.
 - [x] Enforce single-instance desktop app startup.
+- [x] Harden app icon initialization to avoid startup crashes from missing/invalid pack URI resources.
+- [x] Surface authentication mode/fallback context in status/logging to aid support diagnostics.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.

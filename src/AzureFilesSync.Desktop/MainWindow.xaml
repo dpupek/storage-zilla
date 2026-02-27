@@ -6,7 +6,6 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="Storage Zilla by Danm@de Software"
-        Icon="Assets/Branding/app.ico"
         Height="760"
         Width="1280"
         MinHeight="600"

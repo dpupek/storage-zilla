@@ -7,6 +7,8 @@ using AzureFilesSync.Desktop.Services;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
 using System.IO;
+using System.Net.Http;
+using System.Net.Sockets;
 using Xunit;
 
 namespace AzureFilesSync.UITests;
@@ -449,6 +451,78 @@ public sealed class MainWindowAndViewModelUiTests
         #endregion
     }
 
+    [Fact]
+    public async Task MainViewModel_SignIn_WithBrowserFallback_ShowsFallbackStatus()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(new LoginSession(true, "tester", "tenant", "SystemBrowser", UsedFallback: true)),
+            new StubDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("Not signed in", viewModel.LoginStatus);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Contains("browser fallback", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignIn_WhenShareEndpointDnsFails_KeepsSignedInAndShowsFriendlyRemoteMessage()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(new LoginSession(true, "tester", "tenant")),
+            new DnsFailingDiscoveryService(),
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("Not signed in", viewModel.LoginStatus);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Contains("Signed in", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unreachable", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Cannot resolve", viewModel.RemotePaneStatusMessage, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
     private static MainViewModel CreateViewModel(IRemoteCapabilityService remoteCapabilityService, out SpyTransferQueueService queue)
     {
         queue = new SpyTransferQueueService();
@@ -573,8 +647,15 @@ public sealed class MainWindowAndViewModelUiTests
 
     private sealed class StubAuthenticationService : IAuthenticationService
     {
+        private readonly LoginSession _session;
+
+        public StubAuthenticationService(LoginSession? session = null)
+        {
+            _session = session ?? new LoginSession(true, "tester", "tenant");
+        }
+
         public TokenCredential GetCredential() => throw new NotSupportedException();
-        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken) => Task.FromResult(new LoginSession(true, "tester", "tenant"));
+        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken) => Task.FromResult(_session);
         public Task SignOutAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
@@ -623,6 +704,32 @@ public sealed class MainWindowAndViewModelUiTests
             yield return new FileShareItem("zshare");
             yield return new FileShareItem("ashare");
             yield return new FileShareItem("mshare");
+        }
+    }
+
+    private sealed class DnsFailingDiscoveryService : IAzureDiscoveryService
+    {
+        public async IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new SubscriptionItem("sub", "Subscription");
+        }
+
+        public async IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new StorageAccountItem(subscriptionId, "nexportstudiostorage", "rg");
+        }
+
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            var socket = new SocketException((int)SocketError.HostNotFound);
+            var http = new HttpRequestException("No such host is known.", socket);
+            throw new AggregateException(http);
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
         }
     }
 

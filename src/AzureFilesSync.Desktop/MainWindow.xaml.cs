@@ -1,4 +1,5 @@
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Desktop.Branding;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
@@ -16,6 +17,14 @@ public partial class MainWindow : Window
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
+        try
+        {
+            Icon = BrandAssets.CreateAppIcon();
+        }
+        catch
+        {
+            // Keep window startup resilient if icon resource resolution fails.
+        }
         DataContext = viewModel;
         Loaded += OnLoaded;
     }

@@ -268,8 +268,14 @@ public partial class MainViewModel : ObservableObject
         {
             Log.Information("User initiated interactive sign-in.");
             var session = await _authenticationService.SignInInteractiveAsync(CancellationToken.None);
-            LoginStatus = $"Signed in as {session.DisplayName}";
-            Log.Information("Sign-in completed for {DisplayName}", session.DisplayName);
+            LoginStatus = session.UsedFallback
+                ? $"Signed in as {session.DisplayName} (browser fallback)."
+                : $"Signed in as {session.DisplayName}";
+            Log.Information(
+                "Sign-in completed for {DisplayName}. AuthMode={AuthMode} UsedFallback={UsedFallback}",
+                session.DisplayName,
+                session.AuthMode,
+                session.UsedFallback);
 
             var subscriptions = new List<SubscriptionItem>();
             await foreach (var subscription in _azureDiscoveryService.ListSubscriptionsAsync(CancellationToken.None))
