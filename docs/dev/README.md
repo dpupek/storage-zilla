@@ -65,6 +65,17 @@ git push -u origin beta   # first push only
 ```
 3. Verify run in GitHub Actions: `Release MSIX Beta`.
 
+### Beta Must Not Lag Main
+- Repo rule: `beta` is guarded by `Beta Sync Guard`.
+- Requirement: before new changes are merged into `beta`, `beta` must already contain the latest `main`.
+- If guard fails:
+```bash
+git switch beta
+git fetch origin
+git merge origin/main
+git push origin beta
+```
+
 ### Trigger a Production Release
 1. Merge/promote validated changes from `beta` to `main`.
 2. Push `main`:
