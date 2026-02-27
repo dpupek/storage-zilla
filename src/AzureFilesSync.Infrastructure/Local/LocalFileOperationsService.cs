@@ -54,6 +54,19 @@ public sealed class LocalFileOperationsService : ILocalFileOperationsService
         return Task.CompletedTask;
     }
 
+    public Task CreateDirectoryAsync(string parentPath, string name, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(parentPath) || string.IsNullOrWhiteSpace(name))
+        {
+            return Task.CompletedTask;
+        }
+
+        var fullPath = Path.Combine(parentPath, name);
+        Directory.CreateDirectory(fullPath);
+        return Task.CompletedTask;
+    }
+
     public Task RenameAsync(string path, string newName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

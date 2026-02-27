@@ -15,6 +15,7 @@
         <conv:EntryTypeConverter x:Key="EntryTypeConverter" />
         <conv:EntrySizeConverter x:Key="EntrySizeConverter" />
         <conv:LocalDateTimeConverter x:Key="LocalDateTimeConverter" />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     </Window.Resources>
     <Grid Margin="12">
         <Grid.RowDefinitions>
@@ -96,8 +97,24 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Column="0" Grid.Row="0" Text="Local" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TextBlock Grid.Column="2" Grid.Row="0" Text="Remote" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <Grid Grid.Column="0" Grid.Row="0" Margin="0,0,0,6">
+                <TextBlock Text="Local" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Width="36" Height="26" ToolTip="Up one folder" Command="{Binding NavigateLocalUpCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Content="New Folder" Margin="8,0,0,0" Padding="8,0" Command="{Binding CreateLocalFolderCommand}" />
+                </StackPanel>
+            </Grid>
+            <Grid Grid.Column="2" Grid.Row="0" Margin="0,0,0,6">
+                <TextBlock Text="Remote" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Width="36" Height="26" ToolTip="Up one folder" Command="{Binding NavigateRemoteUpCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Content="New Folder" Margin="8,0,0,0" Padding="8,0" Command="{Binding CreateRemoteFolderCommand}" />
+                </StackPanel>
+            </Grid>
 
             <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
                 <ComboBox x:Name="LocalPathCombo"
@@ -173,14 +190,22 @@
             </DataGrid>
 
             <StackPanel Grid.Column="1" Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center">
-                <Button Content="&gt;&gt;" Width="44" Margin="0,0,0,12" ToolTip="Upload selected" Command="{Binding EnqueueUploadCommand}" />
-                <Button Content="&lt;&lt;" Width="44" ToolTip="Download selected" Command="{Binding EnqueueDownloadCommand}" />
+                <Button Content="&gt;&gt;" Width="44" Margin="0,0,0,12" ToolTip="Upload selected" Click="CenterUploadStartNow_Click" />
+                <Button Content="&lt;&lt;" Width="44" ToolTip="Download selected" Click="CenterDownloadStartNow_Click" />
             </StackPanel>
 
             <Grid Grid.Column="2" Grid.Row="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
                 <DataGrid x:Name="RemoteGrid"
+                          Grid.Row="0"
                           ItemsSource="{Binding RemoteGridEntries}"
                           SelectedItem="{Binding SelectedRemoteEntry}"
+                          SelectionChanged="RemoteGrid_SelectionChanged"
+                          IsEnabled="{Binding IsRemoteGridEnabled}"
                           AutoGenerateColumns="False"
                           IsReadOnly="True"
                           SelectionMode="Extended"
@@ -225,6 +250,7 @@
                 </DataGrid>
 
                 <Border Background="#CCFFF8E1"
+                        Grid.Row="0"
                         BorderBrush="#FFE0A300"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -247,12 +273,47 @@
                                    Margin="0,0,10,0"
                                    VerticalAlignment="Top"
                                    Foreground="#FF8A5A00" />
-                        <TextBlock Text="{Binding RemotePaneStatusMessage}"
-                                   TextWrapping="Wrap"
-                                   Foreground="#FF4E3A00"
-                                   VerticalAlignment="Center" />
+                        <StackPanel>
+                            <TextBlock Text="{Binding RemotePaneStatusMessage}"
+                                       TextWrapping="Wrap"
+                                       Foreground="#FF4E3A00"
+                                       VerticalAlignment="Center" />
+                            <Button Content="Copy diagnostics"
+                                    Margin="0,8,0,0"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding CopyRemoteDiagnosticsCommand}" />
+                        </StackPanel>
                     </DockPanel>
                 </Border>
+
+                <Border Grid.Row="0"
+                        Background="#AAFFFFFF"
+                        BorderBrush="#B7CBE6"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Margin="10"
+                        Visibility="{Binding IsRemoteLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel VerticalAlignment="Center"
+                                HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding RemoteLoadingMessage}"
+                                   FontWeight="SemiBold"
+                                   Foreground="#25476A"
+                                   HorizontalAlignment="Center" />
+                        <ProgressBar Width="220"
+                                     Height="12"
+                                     Margin="0,8,0,0"
+                                     IsIndeterminate="True"
+                                     Visibility="{Binding IsRemoteSpinnerVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    </StackPanel>
+                </Border>
+
+                <Button Grid.Row="1"
+                        Margin="0,6,0,0"
+                        HorizontalAlignment="Center"
+                        Padding="12,4"
+                        Content="Load more"
+                        Command="{Binding LoadMoreRemoteEntriesCommand}"
+                        Visibility="{Binding HasMoreRemoteEntries, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </Grid>
         </Grid>
 
@@ -305,6 +366,7 @@
                     <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Run queued jobs" Command="{Binding RunQueueCommand}">
                         <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
+                    <Button Margin="10,0,0,0" Padding="8,0" ToolTip="Clear completed and canceled queue items" Content="Clear Completed/Canceled" Command="{Binding ClearCompletedCanceledQueueCommand}" />
                 </StackPanel>
             </Grid>
             <DataGrid Grid.Row="2"

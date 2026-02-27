@@ -15,6 +15,9 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Storage Zilla is already installed." />
     <MediaTemplate EmbedCab="yes" />
+    <Condition Message="A Storage Zilla MSIX installation is already present. Uninstall the MSIX version before installing the MSI version.">
+      Installed OR NOT MSIX_PACKAGE_FOLDER
+    </Condition>
     <Icon Id="AppIcon.ico" SourceFile="src\AzureFilesSync.Desktop\Assets\Branding\app.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
@@ -29,6 +32,14 @@
       <ComponentRef Id="StartMenuShortcutComponent" />
     </Feature>
   </Product>
+
+  <Fragment>
+    <Property Id="MSIX_PACKAGE_FOLDER">
+      <DirectorySearch Id="SearchWindowsAppsRoot" Path="[ProgramFilesFolder]WindowsApps">
+        <DirectorySearch Id="SearchStorageZillaMsixFolder" Name="StorageZilla.Desktop_*" />
+      </DirectorySearch>
+    </Property>
+  </Fragment>
 
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">

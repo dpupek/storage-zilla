@@ -112,6 +112,13 @@ public sealed class RemoteCapabilityServiceIntegrationTests
             return Task.FromResult(Behavior(path));
         }
 
+        public Task<RemoteDirectoryPage> ListDirectoryPageAsync(SharePath path, string? continuationToken, int pageSize, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            var entries = Behavior(path);
+            return Task.FromResult(new RemoteDirectoryPage(entries, null, false));
+        }
+
         public Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken) =>
             Task.FromResult<RemoteEntry?>(null);
     }

@@ -53,6 +53,14 @@ public partial class App : Application
         Log.Information("Starting AzureFilesSync desktop app. Logs: {LogDirectory}", logDirectory);
         AttachUnhandledExceptionHandlers();
 
+        if (InstallationConflictGuard.TryGetConflictMessage(out var installConflict))
+        {
+            Log.Warning("Installer mode conflict detected: {Conflict}", installConflict);
+            ErrorDialog.ShowMessage("Installation conflict detected", installConflict);
+            Shutdown();
+            return;
+        }
+
         _host = Host.CreateDefaultBuilder()
             .UseSerilog()
             .ConfigureServices(services =>
@@ -103,24 +111,80 @@ public partial class App : Application
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        ErrorDialog.Show("Unhandled UI exception.", e.Exception);
+        ShowErrorOnUiThread("Unhandled UI exception.", e.Exception);
         e.Handled = true;
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        ErrorDialog.Show("Unhandled background task exception.", e.Exception);
         e.SetObserved();
+        ShowErrorOnUiThread("Unhandled background task exception.", e.Exception);
     }
 
     private static void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         if (e.ExceptionObject is Exception ex)
         {
-            ErrorDialog.Show("Unhandled process exception.", ex);
+            ShowErrorOnUiThread("Unhandled process exception.", ex);
             return;
         }
 
-        ErrorDialog.ShowMessage("Unhandled process exception.", e.ExceptionObject?.ToString() ?? "Unknown unhandled exception object.");
+        ShowMessageOnUiThread("Unhandled process exception.", e.ExceptionObject?.ToString() ?? "Unknown unhandled exception object.");
+    }
+
+    private static void ShowErrorOnUiThread(string summary, Exception exception)
+    {
+        try
+        {
+            var dispatcher = Current?.Dispatcher;
+            if (dispatcher is null)
+            {
+                Log.Error(exception, "{Summary}", summary);
+                return;
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                ErrorDialog.Show(summary, exception);
+                return;
+            }
+
+            _ = dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() => ErrorDialog.Show(summary, exception)));
+        }
+        catch (Exception dispatchException)
+        {
+            Log.Error(dispatchException, "Failed to surface error dialog for summary {Summary}", summary);
+            Log.Error(exception, "{Summary}", summary);
+        }
+    }
+
+    private static void ShowMessageOnUiThread(string summary, string message)
+    {
+        try
+        {
+            var dispatcher = Current?.Dispatcher;
+            if (dispatcher is null)
+            {
+                Log.Error("{Summary}: {Message}", summary, message);
+                return;
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                ErrorDialog.ShowMessage(summary, message);
+                return;
+            }
+
+            _ = dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() => ErrorDialog.ShowMessage(summary, message)));
+        }
+        catch (Exception dispatchException)
+        {
+            Log.Error(dispatchException, "Failed to surface message dialog for summary {Summary}", summary);
+            Log.Error("{Summary}: {Message}", summary, message);
+        }
     }
 }

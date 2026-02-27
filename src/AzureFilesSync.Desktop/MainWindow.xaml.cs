@@ -44,6 +44,8 @@ public partial class MainWindow : Window
     private async void LocalUploadAddToQueue_Click(object sender, RoutedEventArgs e) => await QueueLocalAsync(startImmediately: false);
     private async void RemoteDownloadStartNow_Click(object sender, RoutedEventArgs e) => await QueueRemoteAsync(startImmediately: true);
     private async void RemoteDownloadAddToQueue_Click(object sender, RoutedEventArgs e) => await QueueRemoteAsync(startImmediately: false);
+    private async void CenterUploadStartNow_Click(object sender, RoutedEventArgs e) => await QueueLocalAsync(startImmediately: true);
+    private async void CenterDownloadStartNow_Click(object sender, RoutedEventArgs e) => await QueueRemoteAsync(startImmediately: true);
     private async void LocalShowInExplorer_Click(object sender, RoutedEventArgs e) => await RunLocalEntryActionAsync(vm => vm.ShowInExplorerAsync(LocalGrid.SelectedItem as LocalEntry), "Show in Explorer failed.");
     private async void LocalOpen_Click(object sender, RoutedEventArgs e) => await RunLocalEntryActionAsync(vm => vm.OpenLocalAsync(LocalGrid.SelectedItem as LocalEntry), "Open failed.");
     private async void LocalOpenWith_Click(object sender, RoutedEventArgs e) => await RunLocalEntryActionAsync(vm => vm.OpenLocalWithAsync(LocalGrid.SelectedItem as LocalEntry), "Open with failed.");
@@ -211,7 +213,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        await vm.OpenLocalEntryAsync(LocalGrid.SelectedItem as LocalEntry);
+        await vm.OpenLocalEntryAsync(GetDoubleClickedItem<LocalEntry>(LocalGrid, e) ?? LocalGrid.SelectedItem as LocalEntry);
     }
 
     private async void RemoteGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -221,7 +223,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        await vm.OpenRemoteEntryAsync(RemoteGrid.SelectedItem as RemoteEntry);
+        await vm.OpenRemoteEntryAsync(GetDoubleClickedItem<RemoteEntry>(RemoteGrid, e) ?? RemoteGrid.SelectedItem as RemoteEntry);
+    }
+
+    private static TItem? GetDoubleClickedItem<TItem>(DataGrid grid, MouseButtonEventArgs e) where TItem : class
+    {
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return null;
+        }
+
+        var row = ItemsControl.ContainerFromElement(grid, source) as DataGridRow;
+        return row?.Item as TItem;
     }
 
     private async void LocalPathCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -290,6 +303,16 @@ public partial class MainWindow : Window
         }
 
         vm.UpdateSelectedQueueSelection(QueueGrid.SelectedItems);
+    }
+
+    private void RemoteGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        vm.UpdateSelectedRemoteSelection(RemoteGrid.SelectedItems);
     }
 
     private async void LocalColumnToggle_Click(object sender, RoutedEventArgs e)

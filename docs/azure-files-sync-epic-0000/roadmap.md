@@ -77,6 +77,9 @@
 - [x] Enforce single-instance desktop app startup.
 - [x] Harden app icon initialization to avoid startup crashes from missing/invalid pack URI resources.
 - [x] Surface authentication mode/fallback context in status/logging to aid support diagnostics.
+- [x] Add clearer DNS/network failure guidance that explicitly mentions antivirus/proxy/firewall allow rules for Azure Files endpoints.
+- [x] Add a `Copy diagnostics` action for share discovery failures (endpoint + exception summary).
+- [x] Add preflight endpoint connectivity validation for selected storage accounts to fail fast before long share-enumeration retries.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.

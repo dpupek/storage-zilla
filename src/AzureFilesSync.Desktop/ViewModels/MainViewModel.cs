@@ -14,6 +14,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Data;
@@ -27,10 +28,14 @@ public partial class MainViewModel : ObservableObject
     private const int MaxTransferConcurrency = 32;
     private const int MinTransferMaxBytesPerSecond = 0;
     private const int MaxTransferMaxBytesPerSecond = 1024 * 1024 * 1024;
+    private const int RemotePageSize = 500;
     private const string QueueFilterAll = "All";
+    private static readonly TimeSpan DefaultRemoteOpenDirectoryTimeout = TimeSpan.FromSeconds(20);
 
     private readonly IAuthenticationService _authenticationService;
     private readonly IAzureDiscoveryService _azureDiscoveryService;
+    private readonly IStorageEndpointPreflightService _storageEndpointPreflightService;
+    private readonly IRemoteReadTaskScheduler _remoteReadTaskScheduler;
     private readonly ILocalBrowserService _localBrowserService;
     private readonly IAzureFilesBrowserService _azureFilesBrowserService;
     private readonly ILocalFileOperationsService _localFileOperationsService;
@@ -45,17 +50,20 @@ public partial class MainViewModel : ObservableObject
     private readonly IRemoteActionPolicyService _remoteActionPolicyService;
     private readonly IAppUpdateService _appUpdateService;
     private readonly IUserHelpContentService _userHelpContentService;
+    private readonly TimeSpan _remoteOpenDirectoryTimeout;
 
     private MirrorPlan? _lastMirrorPlan;
     private bool _isRestoringProfile;
     private bool _suppressSelectionHandlers;
     private bool _isUpdatingRemoteSelection;
-    private CancellationTokenSource _selectionCts = new();
     private DateTimeOffset _lastLocalRefreshUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastRemoteRefreshUtc = DateTimeOffset.MinValue;
     private string _lastSuccessfulLocalPath = NormalizeLocalPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    private string _lastSuccessfulRemotePath = string.Empty;
     private readonly Lock _remoteEnrichmentLock = new();
     private readonly HashSet<string> _remoteEnrichmentInFlight = [];
+    private readonly List<RemoteEntry> _selectedRemoteEntries = [];
+    private string? _remoteContinuationToken;
 
     public ObservableCollection<SubscriptionItem> Subscriptions { get; } = [];
     public ObservableCollection<StorageAccountItem> StorageAccounts { get; } = [];
@@ -105,6 +113,27 @@ public partial class MainViewModel : ObservableObject
     private string _remotePaneStatusMessage = string.Empty;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CopyRemoteDiagnosticsCommand))]
+    private string _remoteDiagnosticsDetails = string.Empty;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(LoadMoreRemoteEntriesCommand))]
+    [NotifyCanExecuteChangedFor(nameof(BuildMirrorPlanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ExecuteMirrorCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EnqueueDownloadCommand))]
+    private bool _isRemoteLoading;
+
+    [ObservableProperty]
+    private bool _isRemoteSpinnerVisible;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(LoadMoreRemoteEntriesCommand))]
+    private bool _hasMoreRemoteEntries;
+
+    [ObservableProperty]
+    private string _remoteLoadingMessage = string.Empty;
+
+    [ObservableProperty]
     private bool _includeDeletes;
 
     [ObservableProperty]
@@ -142,6 +171,7 @@ public partial class MainViewModel : ObservableObject
 
     public string StatusConcurrencyText => $"Concurrency: {TransferMaxConcurrency}";
     public string StatusQueueText => string.IsNullOrWhiteSpace(QueueBatchStatusMessage) ? "Queue: idle" : QueueBatchStatusMessage;
+    public bool IsRemoteGridEnabled => !IsRemoteLoading;
 
     public string RemotePathDisplay
     {
@@ -174,6 +204,7 @@ public partial class MainViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(ExecuteMirrorCommand))]
     [NotifyCanExecuteChangedFor(nameof(EnqueueUploadCommand))]
     [NotifyCanExecuteChangedFor(nameof(EnqueueDownloadCommand))]
+    [NotifyCanExecuteChangedFor(nameof(LoadMoreRemoteEntriesCommand))]
     private RemoteCapabilitySnapshot? _remoteCapability;
 
     [ObservableProperty]
@@ -222,6 +253,8 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(
         IAuthenticationService authenticationService,
         IAzureDiscoveryService azureDiscoveryService,
+        IStorageEndpointPreflightService storageEndpointPreflightService,
+        IRemoteReadTaskScheduler remoteReadTaskScheduler,
         ILocalBrowserService localBrowserService,
         IAzureFilesBrowserService azureFilesBrowserService,
         ILocalFileOperationsService localFileOperationsService,
@@ -235,10 +268,13 @@ public partial class MainViewModel : ObservableObject
         IRemoteCapabilityService remoteCapabilityService,
         IRemoteActionPolicyService remoteActionPolicyService,
         IAppUpdateService appUpdateService,
-        IUserHelpContentService userHelpContentService)
+        IUserHelpContentService userHelpContentService,
+        TimeSpan? remoteOpenDirectoryTimeout = null)
     {
         _authenticationService = authenticationService;
         _azureDiscoveryService = azureDiscoveryService;
+        _storageEndpointPreflightService = storageEndpointPreflightService;
+        _remoteReadTaskScheduler = remoteReadTaskScheduler;
         _localBrowserService = localBrowserService;
         _azureFilesBrowserService = azureFilesBrowserService;
         _localFileOperationsService = localFileOperationsService;
@@ -253,6 +289,7 @@ public partial class MainViewModel : ObservableObject
         _remoteActionPolicyService = remoteActionPolicyService;
         _appUpdateService = appUpdateService;
         _userHelpContentService = userHelpContentService;
+        _remoteOpenDirectoryTimeout = remoteOpenDirectoryTimeout ?? DefaultRemoteOpenDirectoryTimeout;
         UpdateChannel = _appUpdateService.CurrentChannel;
 
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
@@ -340,58 +377,378 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task LoadRemoteDirectoryAsync()
     {
+        var previousPath = _lastSuccessfulRemotePath;
+        var snapshot = CaptureRemoteViewSnapshot();
+        await ExecuteRemoteReadTaskAsync(
+            loadingMessage: "Loading remote directory...",
+            clearGridFirst: false,
+            showSpinnerAfterDelay: false,
+            errorMessage: "Failed to load remote directory.",
+            operation: token => LoadRemoteDirectoryPageAsync(reset: true, token),
+            onFailureRollbackAsync: () =>
+            {
+                RestoreRemoteViewSnapshot(snapshot);
+                RemotePath = previousPath;
+                return Task.CompletedTask;
+            });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanLoadMoreRemoteEntries))]
+    private async Task LoadMoreRemoteEntriesAsync()
+    {
+        await ExecuteRemoteReadTaskAsync(
+            loadingMessage: "Loading more remote entries...",
+            clearGridFirst: false,
+            showSpinnerAfterDelay: false,
+            errorMessage: "Failed to load more remote entries.",
+            operation: token => LoadRemoteDirectoryPageAsync(reset: false, token),
+            onFailureRollbackAsync: null);
+    }
+
+    private async Task<bool> ExecuteRemoteReadTaskAsync(
+        string loadingMessage,
+        bool clearGridFirst,
+        bool showSpinnerAfterDelay,
+        string errorMessage,
+        Func<CancellationToken, Task<bool>> operation,
+        Func<Task>? onFailureRollbackAsync,
+        TimeSpan? operationTimeout = null,
+        string? timeoutMessage = null)
+    {
+        if (clearGridFirst)
+        {
+            ClearRemoteEntriesAndPaging();
+        }
+
+        IsRemoteLoading = true;
+        RemoteLoadingMessage = loadingMessage;
+        IsRemoteSpinnerVisible = false;
+
+        using var spinnerCts = new CancellationTokenSource();
+        using var operationTimeoutCts = operationTimeout.HasValue
+            ? new CancellationTokenSource(operationTimeout.Value)
+            : null;
+        var schedulerCancellationToken = operationTimeoutCts?.Token ?? CancellationToken.None;
+        var spinnerTask = showSpinnerAfterDelay
+            ? DelayShowRemoteSpinnerAsync(spinnerCts.Token)
+            : Task.CompletedTask;
+
         try
         {
-            var context = BuildRemoteContext();
-            var capability = await _remoteCapabilityService.RefreshAsync(context, CancellationToken.None);
+            var success = await _remoteReadTaskScheduler.RunLatestAsync(operation, schedulerCancellationToken);
+            if (!success && onFailureRollbackAsync is not null)
+            {
+                await onFailureRollbackAsync();
+            }
+
+            return success;
+        }
+        catch (OperationCanceledException) when (operationTimeoutCts?.IsCancellationRequested == true)
+        {
+            if (onFailureRollbackAsync is not null)
+            {
+                await onFailureRollbackAsync();
+            }
+
+            if (!string.IsNullOrWhiteSpace(timeoutMessage))
+            {
+                QueueBatchStatusMessage = timeoutMessage;
+                OnPropertyChanged(nameof(StatusQueueText));
+            }
+
+            Log.Warning("Remote read operation timed out. Message={LoadingMessage}", loadingMessage);
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Debug("Remote read operation canceled or replaced.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (onFailureRollbackAsync is not null)
+            {
+                await onFailureRollbackAsync();
+            }
+
+            ShowError(errorMessage, ex);
+            return false;
+        }
+        finally
+        {
+            spinnerCts.Cancel();
+            try
+            {
+                await spinnerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Ignore delayed spinner cancellation.
+            }
+
+            IsRemoteSpinnerVisible = false;
+            IsRemoteLoading = false;
+            RemoteLoadingMessage = string.Empty;
+            LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private async Task DelayShowRemoteSpinnerAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+            IsRemoteSpinnerVisible = true;
+        }
+        catch (OperationCanceledException)
+        {
+            // No-op; operation completed before spinner threshold.
+        }
+    }
+
+    private async Task<bool> LoadRemoteDirectoryPageAsync(
+        bool reset,
+        CancellationToken cancellationToken,
+        bool showUnexpectedErrorDialog = true,
+        bool allowRootFallback = true)
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            ClearRemoteEntriesAndPaging();
+            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and file share."));
+            return false;
+        }
+
+        if (!reset && string.IsNullOrWhiteSpace(_remoteContinuationToken))
+        {
+            HasMoreRemoteEntries = false;
+            return false;
+        }
+
+        var context = BuildRemoteContext();
+
+        try
+        {
+            var capability = await _remoteCapabilityService.RefreshAsync(context, cancellationToken);
             ApplyCapability(capability);
 
             if (!capability.CanBrowse)
             {
-                RemoteEntries.Clear();
-                RemoteGridEntries.Clear();
-                return;
+                if (await TryFallbackToRemoteRootOnNotFoundAsync(
+                        context,
+                        capability,
+                        reset,
+                        showUnexpectedErrorDialog,
+                        allowRootFallback,
+                        cancellationToken))
+                {
+                    return true;
+                }
+
+                if (reset)
+                {
+                    ClearRemoteEntriesAndPaging();
+                }
+
+                return false;
             }
 
-            RemoteEntries.Clear();
             var path = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
-            foreach (var item in await _azureFilesBrowserService.ListDirectoryAsync(path, CancellationToken.None))
+            var continuationToken = reset ? null : _remoteContinuationToken;
+            var page = await _azureFilesBrowserService.ListDirectoryPageAsync(path, continuationToken, RemotePageSize, cancellationToken);
+
+            if (reset)
+            {
+                RemoteEntries.Clear();
+            }
+
+            foreach (var item in page.Entries)
             {
                 RemoteEntries.Add(item);
             }
+
+            _remoteContinuationToken = page.ContinuationToken;
+            HasMoreRemoteEntries = page.HasMore;
             RefreshRemoteGridEntries();
 
-            AddRecentPath(RecentRemotePaths, RemotePath);
-            await PersistProfileAsync();
+            if (reset)
+            {
+                AddRecentPath(RecentRemotePaths, RemotePath);
+                await PersistProfileAsync();
+            }
+            _lastSuccessfulRemotePath = context.Path;
+
             Log.Debug(
-                "Loaded {EntryCount} remote entries. Account={Account} Share={Share} Path={RemotePath}",
+                "Loaded remote entries page. Reset={Reset} Added={AddedCount} Total={TotalCount} HasMore={HasMore} Account={Account} Share={Share} Path={RemotePath}",
+                reset,
+                page.Entries.Count,
                 RemoteEntries.Count,
+                page.HasMore,
                 context.StorageAccountName,
                 context.ShareName,
                 context.Path);
+
+            return true;
         }
         catch (RequestFailedException ex)
         {
-            var context = BuildRemoteContext();
-            var capability = await _remoteCapabilityService.RefreshAsync(context, CancellationToken.None);
+            var capability = await _remoteCapabilityService.RefreshAsync(context, cancellationToken);
             ApplyCapability(capability);
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
+
+            if (await TryFallbackToRemoteRootOnNotFoundAsync(
+                    context,
+                    capability,
+                    reset,
+                    showUnexpectedErrorDialog,
+                    allowRootFallback,
+                    cancellationToken))
+            {
+                return true;
+            }
+
+            if (reset)
+            {
+                ClearRemoteEntriesAndPaging();
+            }
 
             if (capability.State is RemoteAccessState.PermissionDenied or RemoteAccessState.NotFound or RemoteAccessState.TransientFailure)
             {
                 Log.Warning(ex, "Remote directory load mapped to capability state {State}", capability.State);
-                return;
+                return false;
             }
 
-            ShowError("Failed to load remote directory.", ex);
+            if (showUnexpectedErrorDialog)
+            {
+                ShowError("Failed to load remote directory.", ex);
+            }
+            else
+            {
+                Log.Warning(ex, "Remote directory load failed without modal error dialog (reset={Reset}).", reset);
+            }
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
-            ShowError("Failed to load remote directory.", ex);
+            if (reset)
+            {
+                ClearRemoteEntriesAndPaging();
+            }
+
+            if (showUnexpectedErrorDialog)
+            {
+                ShowError("Failed to load remote directory.", ex);
+            }
+            else
+            {
+                Log.Warning(ex, "Remote directory load failed without modal error dialog (reset={Reset}).", reset);
+            }
+            return false;
         }
+    }
+
+    private async Task<bool> TryFallbackToRemoteRootOnNotFoundAsync(
+        RemoteContext context,
+        RemoteCapabilitySnapshot capability,
+        bool reset,
+        bool showUnexpectedErrorDialog,
+        bool allowRootFallback,
+        CancellationToken cancellationToken)
+    {
+        if (!reset ||
+            !allowRootFallback ||
+            capability.State != RemoteAccessState.NotFound ||
+            string.IsNullOrWhiteSpace(context.Path))
+        {
+            return false;
+        }
+
+        Log.Warning(
+            "Remote path was not found. Retrying at share root. Account={Account} Share={Share} Path={Path}",
+            context.StorageAccountName,
+            context.ShareName,
+            context.Path);
+
+        RemotePath = string.Empty;
+        return await LoadRemoteDirectoryPageAsync(
+            reset: true,
+            cancellationToken,
+            showUnexpectedErrorDialog,
+            allowRootFallback: false);
+    }
+
+    private void ClearRemoteEntriesAndPaging()
+    {
+        _remoteContinuationToken = null;
+        HasMoreRemoteEntries = false;
+        RemoteEntries.Clear();
+        RemoteGridEntries.Clear();
+        SelectedRemoteEntry = null;
+        _selectedRemoteEntries.Clear();
+    }
+
+    private RemoteViewSnapshot CaptureRemoteViewSnapshot()
+    {
+        var selectedEntries = new List<RemoteEntry>();
+        if (_selectedRemoteEntries.Count > 0)
+        {
+            selectedEntries.AddRange(_selectedRemoteEntries);
+        }
+        else if (SelectedRemoteEntry is not null)
+        {
+            selectedEntries.Add(SelectedRemoteEntry);
+        }
+
+        return new RemoteViewSnapshot(
+            RemotePath,
+            [.. RemoteEntries],
+            SelectedRemoteEntry,
+            selectedEntries,
+            _remoteContinuationToken,
+            HasMoreRemoteEntries);
+    }
+
+    private void RestoreRemoteViewSnapshot(RemoteViewSnapshot snapshot)
+    {
+        _lastSuccessfulRemotePath = snapshot.Path;
+        RemoteEntries.Clear();
+        foreach (var item in snapshot.Entries)
+        {
+            RemoteEntries.Add(item);
+        }
+
+        _remoteContinuationToken = snapshot.ContinuationToken;
+        HasMoreRemoteEntries = snapshot.HasMore;
+        RefreshRemoteGridEntries();
+
+        if (snapshot.SelectedEntry is null)
+        {
+            SelectedRemoteEntry = null;
+            _selectedRemoteEntries.Clear();
+            EnqueueDownloadCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
+        SelectedRemoteEntry = RemoteGridEntries.FirstOrDefault(x =>
+            string.Equals(x.Name, snapshot.SelectedEntry.Name, StringComparison.Ordinal) &&
+            string.Equals(x.FullPath, snapshot.SelectedEntry.FullPath, StringComparison.OrdinalIgnoreCase));
+
+        _selectedRemoteEntries.Clear();
+        foreach (var selected in snapshot.SelectedEntries)
+        {
+            var mapped = RemoteGridEntries.FirstOrDefault(x =>
+                string.Equals(x.Name, selected.Name, StringComparison.Ordinal) &&
+                string.Equals(x.FullPath, selected.FullPath, StringComparison.OrdinalIgnoreCase));
+            if (mapped is not null && mapped.Name != "..")
+            {
+                _selectedRemoteEntries.Add(mapped);
+            }
+        }
+
+        EnqueueDownloadCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand]
@@ -420,6 +777,145 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanNavigateLocalUp))]
+    private async Task NavigateLocalUpAsync()
+    {
+        try
+        {
+            var parent = Directory.GetParent(NormalizeLocalPath(LocalPath))?.FullName;
+            if (string.IsNullOrWhiteSpace(parent))
+            {
+                return;
+            }
+
+            LocalPath = parent;
+            await LoadLocalDirectoryAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError("Failed to navigate to local parent folder.", ex);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCreateLocalFolder))]
+    private async Task CreateLocalFolderAsync()
+    {
+        try
+        {
+            var parent = NormalizeLocalPath(LocalPath);
+            if (!Directory.Exists(parent))
+            {
+                return;
+            }
+
+            var folderName = BuildUniqueFolderName(
+                candidate => Directory.Exists(Path.Combine(parent, candidate)) || File.Exists(Path.Combine(parent, candidate)),
+                "New Folder");
+            await _localFileOperationsService.CreateDirectoryAsync(parent, folderName, CancellationToken.None);
+            await LoadLocalDirectoryAsync();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log.Warning(ex, "Access denied while creating local folder under {LocalPath}", LocalPath);
+            QueueBatchStatusMessage = "Access denied while creating local folder.";
+            OnPropertyChanged(nameof(StatusQueueText));
+        }
+        catch (IOException ex)
+        {
+            Log.Warning(ex, "IO failure while creating local folder under {LocalPath}", LocalPath);
+            QueueBatchStatusMessage = "Failed to create local folder due to an IO error.";
+            OnPropertyChanged(nameof(StatusQueueText));
+        }
+        catch (Exception ex)
+        {
+            ShowError("Failed to create local folder.", ex);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanNavigateRemoteUp))]
+    private async Task NavigateRemoteUpAsync()
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null || string.IsNullOrWhiteSpace(RemotePath))
+        {
+            return;
+        }
+
+        try
+        {
+            var normalized = NormalizeRemotePathDisplay(RemotePath);
+            var parent = normalized.Contains('/')
+                ? normalized[..normalized.LastIndexOf('/')]
+                : string.Empty;
+
+            var snapshot = CaptureRemoteViewSnapshot();
+            var previousPath = RemotePath;
+            RemotePath = parent;
+
+            await ExecuteRemoteReadTaskAsync(
+                loadingMessage: "Loading parent remote folder...",
+                clearGridFirst: false,
+                showSpinnerAfterDelay: true,
+                errorMessage: "Failed to open parent remote folder.",
+                operation: token => LoadRemoteDirectoryPageAsync(reset: true, token, showUnexpectedErrorDialog: false),
+                onFailureRollbackAsync: () =>
+                {
+                    RestoreRemoteViewSnapshot(snapshot);
+                    RemotePath = previousPath;
+                    return Task.CompletedTask;
+                });
+        }
+        catch (Exception ex)
+        {
+            ShowError("Failed to navigate to remote parent folder.", ex);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCreateRemoteFolder))]
+    private async Task CreateRemoteFolderAsync()
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var folderName = BuildUniqueFolderName(
+                candidate => RemoteEntries.Any(x => string.Equals(x.Name, candidate, StringComparison.OrdinalIgnoreCase)),
+                "New Folder");
+            var relativePath = CombineRemotePath(RemotePath, folderName);
+            await _remoteFileOperationsService.CreateDirectoryAsync(
+                new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, relativePath),
+                CancellationToken.None);
+            await LoadRemoteDirectoryAsync();
+        }
+        catch (RequestFailedException ex) when (ex.Status == 403)
+        {
+            Log.Warning(
+                ex,
+                "Permission denied creating remote folder. Account={Account} Share={Share} Path={Path}",
+                SelectedStorageAccount.Name,
+                SelectedFileShare.Name,
+                RemotePath);
+            RemotePaneStatusMessage = "Permission denied while creating remote folder. Verify Azure Files data roles for this storage account.";
+        }
+        catch (RequestFailedException ex) when (ex.Status == 409)
+        {
+            Log.Warning(
+                ex,
+                "Remote folder create conflict. Account={Account} Share={Share} Path={Path}",
+                SelectedStorageAccount.Name,
+                SelectedFileShare.Name,
+                RemotePath);
+            QueueBatchStatusMessage = "Remote folder already exists.";
+            OnPropertyChanged(nameof(StatusQueueText));
+        }
+        catch (Exception ex)
+        {
+            ShowError("Failed to create remote folder.", ex);
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanEnqueueUpload))]
     private async Task EnqueueUploadAsync()
     {
@@ -444,22 +940,24 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanEnqueueDownload))]
     private async Task EnqueueDownloadAsync()
     {
-        if (SelectedRemoteEntry is null || SelectedRemoteEntry.Name == ".." || SelectedStorageAccount is null || SelectedFileShare is null)
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
         {
             return;
         }
 
-        var normalizedLocalPath = NormalizeLocalPath(LocalPath);
-        LocalPath = normalizedLocalPath;
-        var localTarget = Path.Combine(normalizedLocalPath, SelectedRemoteEntry.Name);
-        var request = CreateTransferRequest(
-            TransferDirection.Download,
-            localTarget,
-            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, SelectedRemoteEntry.FullPath),
-            DownloadConflictDefaultPolicy);
-        var batch = await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
-        SetQueueBatchStatus(batch);
-        await PersistProfileAsync();
+        var selected = GetCurrentRemoteDownloadSelection();
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        var selectedRows = new ArrayList(selected.Count);
+        foreach (var entry in selected)
+        {
+            selectedRows.Add(entry);
+        }
+
+        await QueueRemoteSelectionAsync(selectedRows, startImmediately: true);
     }
 
     [RelayCommand(CanExecute = nameof(CanActOnSelectedQueueItems))]
@@ -498,6 +996,20 @@ public partial class MainViewModel : ObservableObject
         await _transferQueueService.PauseAllAsync(CancellationToken.None);
     }
 
+    [RelayCommand(CanExecute = nameof(CanClearCompletedCanceledQueue))]
+    private async Task ClearCompletedCanceledQueueAsync()
+    {
+        var removed = await _transferQueueService.PurgeAsync(
+            [TransferJobStatus.Completed, TransferJobStatus.Canceled],
+            CancellationToken.None);
+
+        RefreshQueueItemsFromSnapshot();
+        QueueBatchStatusMessage = removed > 0
+            ? $"Cleared {removed} completed/canceled queue item(s)."
+            : "No completed or canceled queue items to clear.";
+        OnPropertyChanged(nameof(StatusQueueText));
+    }
+
     [RelayCommand]
     private void ShowAllQueueFilters()
     {
@@ -513,18 +1025,35 @@ public partial class MainViewModel : ObservableObject
         MessageBox.Show("Connection profile saved.", "Profile", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    [RelayCommand(CanExecute = nameof(CanCopyRemoteDiagnostics))]
+    private void CopyRemoteDiagnostics()
+    {
+        if (string.IsNullOrWhiteSpace(RemoteDiagnosticsDetails))
+        {
+            return;
+        }
+
+        Clipboard.SetText(RemoteDiagnosticsDetails);
+        QueueBatchStatusMessage = "Diagnostics copied to clipboard.";
+        OnPropertyChanged(nameof(StatusQueueText));
+    }
+
     [RelayCommand]
     private async Task SignOutAsync()
     {
         try
         {
+            _remoteReadTaskScheduler.CancelCurrent();
             await _authenticationService.SignOutAsync(CancellationToken.None);
             LoginStatus = "Not signed in";
             Subscriptions.Clear();
             StorageAccounts.Clear();
             FileShares.Clear();
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
+            ClearRemoteEntriesAndPaging();
+            IsRemoteLoading = false;
+            IsRemoteSpinnerVisible = false;
+            RemoteLoadingMessage = string.Empty;
+            ClearRemoteDiagnostics();
             ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Sign in to browse Azure file shares."));
             _lastMirrorPlan = null;
             ExecuteMirrorCommand.NotifyCanExecuteChanged();
@@ -736,6 +1265,9 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedSubscriptionChanged(SubscriptionItem? value)
     {
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
+
         if (value is null || _isRestoringProfile || _suppressSelectionHandlers)
         {
             return;
@@ -753,6 +1285,8 @@ public partial class MainViewModel : ObservableObject
     {
         _lastMirrorPlan = null;
         ExecuteMirrorCommand.NotifyCanExecuteChanged();
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
 
         if (value is null || _isRestoringProfile || _suppressSelectionHandlers)
         {
@@ -768,6 +1302,8 @@ public partial class MainViewModel : ObservableObject
     {
         _lastMirrorPlan = null;
         ExecuteMirrorCommand.NotifyCanExecuteChanged();
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
 
         if (value is null || _isRestoringProfile || _suppressSelectionHandlers)
         {
@@ -778,7 +1314,8 @@ public partial class MainViewModel : ObservableObject
             async token =>
             {
                 token.ThrowIfCancellationRequested();
-                await LoadRemoteDirectoryAsync();
+                RemotePath = string.Empty;
+                await LoadRemoteDirectoryPageAsync(reset: true, token);
                 token.ThrowIfCancellationRequested();
                 await PersistProfileAsync();
             },
@@ -797,6 +1334,25 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedRemoteEntryChanged(RemoteEntry? value)
     {
+        if (value is null || value.Name == "..")
+        {
+            if (_selectedRemoteEntries.Count > 0)
+            {
+                _selectedRemoteEntries.Clear();
+            }
+
+            EnqueueDownloadCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
+        if (_selectedRemoteEntries.Count <= 1)
+        {
+            _selectedRemoteEntries.Clear();
+            _selectedRemoteEntries.Add(value);
+        }
+
+        EnqueueDownloadCommand.NotifyCanExecuteChanged();
+
         if (_isUpdatingRemoteSelection || value is null || value.Name == ".." || SelectedStorageAccount is null || SelectedFileShare is null)
         {
             return;
@@ -825,8 +1381,7 @@ public partial class MainViewModel : ObservableObject
         else
         {
             FileShares.Clear();
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
+            ClearRemoteEntriesAndPaging();
             ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and file share."));
         }
 
@@ -838,8 +1393,7 @@ public partial class MainViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(value.Name))
         {
             FileShares.Clear();
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
+            ClearRemoteEntriesAndPaging();
             ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Selected storage account is missing a valid name."));
             LoginStatus = "Signed in. Selected storage account is missing a valid name.";
             return;
@@ -847,6 +1401,7 @@ public partial class MainViewModel : ObservableObject
 
         Log.Information("Storage account changed to {StorageAccount}. Resetting remote path.", value.Name);
         RemotePath = string.Empty;
+        _lastSuccessfulRemotePath = string.Empty;
         await LoadFileSharesAsync(value, cancellationToken);
         if (cancellationToken.IsCancellationRequested)
         {
@@ -882,6 +1437,33 @@ public partial class MainViewModel : ObservableObject
     private async Task LoadFileSharesAsync(StorageAccountItem account, CancellationToken cancellationToken)
     {
         Log.Debug("Loading file shares for storage account {StorageAccountName}", account.Name);
+        var endpointHost = BuildStorageFileEndpointHost(account.Name);
+        var preflight = await _storageEndpointPreflightService.ValidateAsync(endpointHost, cancellationToken);
+        if (!preflight.Success)
+        {
+            ClearRemoteEntriesAndPaging();
+            var message =
+                $"Cannot resolve or reach '{endpointHost}'. " +
+                "Verify private DNS/VPN routing and allow outbound HTTPS (443) through antivirus, proxy, and firewall rules for Azure Files endpoints.";
+            ApplyCapability(new RemoteCapabilitySnapshot(
+                RemoteAccessState.TransientFailure,
+                false,
+                false,
+                false,
+                false,
+                false,
+                message,
+                DateTimeOffset.UtcNow));
+            LoginStatus = $"Signed in. Storage account '{account.Name}' is currently unreachable (DNS/network).";
+            SetRemoteDiagnostics(endpointHost, preflight.FailureSummary ?? "Endpoint preflight failed.");
+            Log.Warning(
+                "Storage endpoint preflight failed for {StorageAccountName}. Endpoint={EndpointHost}. Reason={Reason}",
+                account.Name,
+                endpointHost,
+                preflight.FailureSummary);
+            return;
+        }
+
         var fileShares = new List<FileShareItem>();
         try
         {
@@ -896,15 +1478,14 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
+            ClearRemoteEntriesAndPaging();
             var requestFailed = TryFindRequestFailedException(ex);
             if (IsDnsResolutionFailure(ex))
             {
                 Log.Warning(ex, "Cannot resolve Azure Files endpoint for storage account {StorageAccountName}", account.Name);
                 var message =
-                    $"Cannot resolve '{account.Name}.file.core.windows.net'. " +
-                    "This storage account may require private DNS/VPN/network routing to a private endpoint.";
+                    $"Cannot resolve or reach '{endpointHost}'. " +
+                    "Verify private DNS/VPN routing and allow outbound HTTPS (443) through antivirus, proxy, and firewall rules for Azure Files endpoints.";
                 ApplyCapability(new RemoteCapabilitySnapshot(
                     RemoteAccessState.TransientFailure,
                     false,
@@ -917,6 +1498,7 @@ public partial class MainViewModel : ObservableObject
                     requestFailed?.ErrorCode,
                     requestFailed?.Status > 0 ? requestFailed.Status : null));
                 LoginStatus = $"Signed in. Storage account '{account.Name}' is currently unreachable (DNS/network).";
+                SetRemoteDiagnostics(endpointHost, "DNS resolution failed while listing shares.", ex, requestFailed);
                 return;
             }
 
@@ -937,6 +1519,7 @@ public partial class MainViewModel : ObservableObject
                 ApplyCapability(capability with { UserMessage = $"Cannot list shares for '{account.Name}' (HTTP {requestFailed.Status}). Verify Azure Files data access." });
                 LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' ({requestFailed.Status}).";
                 Log.Warning(ex, "Cannot list shares for storage account {StorageAccountName} due to Azure request failure.", account.Name);
+                SetRemoteDiagnostics(endpointHost, $"HTTP {requestFailed.Status} while listing shares.", ex, requestFailed);
                 return;
             }
 
@@ -951,10 +1534,12 @@ public partial class MainViewModel : ObservableObject
                 $"Cannot list shares for '{account.Name}'. Check connectivity and try Refresh.",
                 DateTimeOffset.UtcNow));
             LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' due to a connectivity error.";
+            SetRemoteDiagnostics(endpointHost, "Unexpected error while listing shares.", ex);
             return;
         }
 
         ReplaceSortedCollection(FileShares, fileShares, x => x.Name);
+        ClearRemoteDiagnostics();
 
         if (SelectedFileShare is null || FileShares.All(x => x.Name != SelectedFileShare.Name))
         {
@@ -964,7 +1549,7 @@ public partial class MainViewModel : ObservableObject
         Log.Debug("Loaded {ShareCount} file shares for {StorageAccountName}", FileShares.Count, account.Name);
 
         cancellationToken.ThrowIfCancellationRequested();
-        await LoadRemoteDirectoryAsync();
+        await LoadRemoteDirectoryPageAsync(reset: true, cancellationToken);
     }
 
     private static RequestFailedException? TryFindRequestFailedException(Exception ex)
@@ -990,8 +1575,8 @@ public partial class MainViewModel : ObservableObject
 
     private static bool IsDnsResolutionFailure(Exception ex)
     {
-        if (ex is System.Net.Sockets.SocketException socket &&
-            socket.SocketErrorCode == System.Net.Sockets.SocketError.HostNotFound)
+        if (ex is SocketException socket &&
+            socket.SocketErrorCode == SocketError.HostNotFound)
         {
             return true;
         }
@@ -1019,6 +1604,41 @@ public partial class MainViewModel : ObservableObject
         return ex.InnerException is not null && IsDnsResolutionFailure(ex.InnerException);
     }
 
+    private static string BuildStorageFileEndpointHost(string storageAccountName) =>
+        $"{storageAccountName}.file.core.windows.net";
+
+    private void SetRemoteDiagnostics(string endpointHost, string summary, Exception? ex = null, RequestFailedException? requestFailed = null)
+    {
+        var details = new List<string>
+        {
+            $"TimestampUtc: {DateTimeOffset.UtcNow:O}",
+            $"EndpointHost: {endpointHost}",
+            $"Summary: {summary}"
+        };
+
+        if (requestFailed is not null)
+        {
+            details.Add($"HttpStatus: {requestFailed.Status}");
+            if (!string.IsNullOrWhiteSpace(requestFailed.ErrorCode))
+            {
+                details.Add($"ErrorCode: {requestFailed.ErrorCode}");
+            }
+        }
+
+        if (ex is not null)
+        {
+            details.Add($"ExceptionType: {ex.GetType().FullName}");
+            details.Add($"ExceptionMessage: {ex.Message}");
+        }
+
+        RemoteDiagnosticsDetails = string.Join(Environment.NewLine, details);
+    }
+
+    private void ClearRemoteDiagnostics()
+    {
+        RemoteDiagnosticsDetails = string.Empty;
+    }
+
     private async Task LoadLocalProfileDefaultsAsync()
     {
         var profile = await _connectionProfileStore.LoadAsync(CancellationToken.None);
@@ -1026,7 +1646,8 @@ public partial class MainViewModel : ObservableObject
         try
         {
             LocalPath = NormalizeLocalPath(profile.LocalPath);
-            RemotePath = profile.RemotePath;
+            RemotePath = NormalizeRemotePathDisplay(profile.RemotePath);
+            _lastSuccessfulRemotePath = RemotePath;
             IncludeDeletes = profile.IncludeDeletes;
             TransferMaxConcurrency = NormalizeTransferConcurrency(profile.TransferMaxConcurrency);
             TransferMaxBytesPerSecond = NormalizeTransferMaxBytesPerSecond(profile.TransferMaxBytesPerSecond);
@@ -1130,6 +1751,11 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        Log.Debug(
+            "Queueing local selection. SelectionCount={SelectionCount} StartImmediately={StartImmediately}",
+            selected.Count,
+            startImmediately);
+
         var requests = new List<TransferRequest>();
         foreach (var entry in selected)
         {
@@ -1176,6 +1802,14 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        var normalizedLocalPath = NormalizeLocalPath(LocalPath);
+        LocalPath = normalizedLocalPath;
+
+        Log.Debug(
+            "Queueing remote selection. SelectionCount={SelectionCount} StartImmediately={StartImmediately}",
+            selected.Count,
+            startImmediately);
+
         var requests = new List<TransferRequest>();
         foreach (var entry in selected)
         {
@@ -1185,7 +1819,7 @@ public partial class MainViewModel : ObservableObject
                 foreach (var file in files)
                 {
                     var relativeUnderFolder = file.FullPath[entry.FullPath.Length..].TrimStart('/');
-                    var localTarget = Path.Combine(LocalPath, entry.Name, relativeUnderFolder.Replace('/', Path.DirectorySeparatorChar));
+                    var localTarget = Path.Combine(normalizedLocalPath, entry.Name, relativeUnderFolder.Replace('/', Path.DirectorySeparatorChar));
                     requests.Add(CreateTransferRequest(
                         TransferDirection.Download,
                         localTarget,
@@ -1195,7 +1829,7 @@ public partial class MainViewModel : ObservableObject
             }
             else
             {
-                var localTarget = Path.Combine(LocalPath, entry.Name);
+                var localTarget = Path.Combine(normalizedLocalPath, entry.Name);
                 requests.Add(CreateTransferRequest(
                     TransferDirection.Download,
                     localTarget,
@@ -1302,13 +1936,39 @@ public partial class MainViewModel : ObservableObject
 
     public async Task OpenRemoteEntryAsync(RemoteEntry? entry)
     {
-        if (entry is null || !entry.IsDirectory)
+        if (entry is null)
         {
             return;
         }
 
+        if (!entry.IsDirectory)
+        {
+            Log.Debug(
+                "Skipping remote open because selected entry is not a directory. Name={Name} Path={Path}",
+                entry.Name,
+                entry.FullPath);
+            return;
+        }
+
+        Log.Debug("Opening remote directory by double-click. Name={Name} Path={Path}", entry.Name, entry.FullPath);
+        var snapshot = CaptureRemoteViewSnapshot();
+        var previousPath = RemotePath;
         RemotePath = entry.FullPath;
-        await LoadRemoteDirectoryAsync();
+
+        await ExecuteRemoteReadTaskAsync(
+            loadingMessage: $"Opening '{entry.Name}'...",
+            clearGridFirst: false,
+            showSpinnerAfterDelay: true,
+            errorMessage: "Failed to open remote folder.",
+            operation: token => LoadRemoteDirectoryPageAsync(reset: true, token, showUnexpectedErrorDialog: false),
+            onFailureRollbackAsync: () =>
+            {
+                RestoreRemoteViewSnapshot(snapshot);
+                RemotePath = previousPath;
+                return Task.CompletedTask;
+            },
+            operationTimeout: _remoteOpenDirectoryTimeout,
+            timeoutMessage: "Opening remote folder timed out. View restored to previous path.");
     }
 
     public async Task UpdateGridLayoutsAsync(GridLayoutProfile? local, GridLayoutProfile? remote)
@@ -1374,6 +2034,7 @@ public partial class MainViewModel : ObservableObject
             if (existing is null)
             {
                 QueueItems.Insert(0, view);
+                ClearCompletedCanceledQueueCommand.NotifyCanExecuteChanged();
                 return;
             }
 
@@ -1389,7 +2050,31 @@ public partial class MainViewModel : ObservableObject
             {
                 _ = RefreshPaneAfterCompletedTransferAsync(e);
             }
+
+            ClearCompletedCanceledQueueCommand.NotifyCanExecuteChanged();
         });
+    }
+
+    private void RefreshQueueItemsFromSnapshot()
+    {
+        var selectedIds = SelectedQueueJobIds.ToHashSet();
+        var snapshots = _transferQueueService.Snapshot();
+
+        QueueItems.Clear();
+        foreach (var snapshot in snapshots)
+        {
+            QueueItems.Add(new QueueItemView { Snapshot = snapshot });
+        }
+
+        SelectedQueueJobIds.Clear();
+        foreach (var jobId in selectedIds.Where(id => QueueItems.Any(x => x.JobId == id)))
+        {
+            SelectedQueueJobIds.Add(jobId);
+        }
+
+        SelectedQueueCount = SelectedQueueJobIds.Count;
+        QueueItemsView.Refresh();
+        ClearCompletedCanceledQueueCommand.NotifyCanExecuteChanged();
     }
 
     private async Task RefreshPaneAfterCompletedTransferAsync(TransferJobSnapshot snapshot)
@@ -1428,10 +2113,16 @@ public partial class MainViewModel : ObservableObject
     {
         RemoteCapability = snapshot;
         RemotePaneStatusMessage = snapshot.State == RemoteAccessState.Accessible ? string.Empty : snapshot.UserMessage;
+        if (string.IsNullOrWhiteSpace(RemotePaneStatusMessage))
+        {
+            ClearRemoteDiagnostics();
+        }
         EnqueueUploadCommand.NotifyCanExecuteChanged();
         EnqueueDownloadCommand.NotifyCanExecuteChanged();
         BuildMirrorPlanCommand.NotifyCanExecuteChanged();
         ExecuteMirrorCommand.NotifyCanExecuteChanged();
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
     }
 
     private RemoteContext BuildRemoteContext() =>
@@ -1445,7 +2136,7 @@ public partial class MainViewModel : ObservableObject
     {
         var inputs = new RemoteActionInputs(
             HasSelectedLocalFile: SelectedLocalEntry is { IsDirectory: false },
-            HasSelectedRemoteFile: SelectedRemoteEntry is { IsDirectory: false },
+            HasSelectedRemoteFile: HasDownloadableRemoteSelection(),
             HasMirrorPlan: _lastMirrorPlan is not null,
             IsMirrorPlanning: IsMirrorPlanning);
         return _remoteActionPolicyService.Compute(RemoteCapability, inputs);
@@ -1486,7 +2177,28 @@ public partial class MainViewModel : ObservableObject
     private bool CanExecuteMirror() => BuildRemotePolicy().CanExecuteMirror;
     private bool CanEnqueueUpload() => BuildRemotePolicy().CanEnqueueUpload;
     private bool CanEnqueueDownload() => BuildRemotePolicy().CanEnqueueDownload;
+    private bool CanNavigateLocalUp() => !string.IsNullOrWhiteSpace(Directory.GetParent(NormalizeLocalPath(LocalPath))?.FullName);
+    private bool CanCreateLocalFolder() => Directory.Exists(NormalizeLocalPath(LocalPath));
+    private bool CanNavigateRemoteUp() =>
+        !IsRemoteLoading &&
+        !string.IsNullOrWhiteSpace(RemotePath) &&
+        SelectedStorageAccount is not null &&
+        SelectedFileShare is not null &&
+        (RemoteCapability?.CanBrowse ?? false);
+    private bool CanCreateRemoteFolder() =>
+        !IsRemoteLoading &&
+        SelectedStorageAccount is not null &&
+        SelectedFileShare is not null &&
+        (RemoteCapability?.CanUpload ?? false);
+    private bool CanLoadMoreRemoteEntries() =>
+        HasMoreRemoteEntries &&
+        !IsRemoteLoading &&
+        SelectedStorageAccount is not null &&
+        SelectedFileShare is not null &&
+        (RemoteCapability?.CanBrowse ?? false);
     private bool CanActOnSelectedQueueItems() => SelectedQueueCount > 0;
+    private bool CanClearCompletedCanceledQueue() => QueueItems.Any(x => x.Status is TransferJobStatus.Completed or TransferJobStatus.Canceled);
+    private bool CanCopyRemoteDiagnostics() => !string.IsNullOrWhiteSpace(RemoteDiagnosticsDetails);
 
     partial void OnTransferMaxConcurrencyChanged(int value)
     {
@@ -1531,9 +2243,30 @@ public partial class MainViewModel : ObservableObject
         _ = PersistProfileAsync();
     }
 
+    partial void OnLocalPathChanged(string value)
+    {
+        NavigateLocalUpCommand.NotifyCanExecuteChanged();
+        CreateLocalFolderCommand.NotifyCanExecuteChanged();
+    }
+
     partial void OnRemotePathChanged(string value)
     {
         OnPropertyChanged(nameof(RemotePathDisplay));
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsRemoteLoadingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsRemoteGridEnabled));
+        LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
+        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnHasMoreRemoteEntriesChanged(bool value)
+    {
+        LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnLoginStatusChanged(string value)
@@ -1575,6 +2308,59 @@ public partial class MainViewModel : ObservableObject
         SelectedQueueCount = SelectedQueueJobIds.Count;
     }
 
+    public void UpdateSelectedRemoteSelection(IList selectedRows)
+    {
+        _selectedRemoteEntries.Clear();
+        foreach (var entry in selectedRows.Cast<object>().OfType<RemoteEntry>())
+        {
+            if (entry.Name == "..")
+            {
+                continue;
+            }
+
+            if (_selectedRemoteEntries.Any(x =>
+                    string.Equals(x.FullPath, entry.FullPath, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(x.Name, entry.Name, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            _selectedRemoteEntries.Add(entry);
+        }
+
+        EnqueueDownloadCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool HasDownloadableRemoteSelection()
+    {
+        if (IsRemoteLoading)
+        {
+            return false;
+        }
+
+        if (_selectedRemoteEntries.Count > 0)
+        {
+            return _selectedRemoteEntries.Any(x => x.Name != "..");
+        }
+
+        return SelectedRemoteEntry is { Name: not ".." };
+    }
+
+    private List<RemoteEntry> GetCurrentRemoteDownloadSelection()
+    {
+        if (_selectedRemoteEntries.Count > 0)
+        {
+            return [.. _selectedRemoteEntries];
+        }
+
+        if (SelectedRemoteEntry is not null && SelectedRemoteEntry.Name != "..")
+        {
+            return [SelectedRemoteEntry];
+        }
+
+        return [];
+    }
+
     private async Task ApplyToSelectedQueueJobsAsync(Func<Guid, CancellationToken, Task> operation)
     {
         var selectedIds = SelectedQueueJobIds.ToList();
@@ -1613,27 +2399,21 @@ public partial class MainViewModel : ObservableObject
 
     private void StartSelectionChangeLoad(Func<CancellationToken, Task> operation, string errorMessage)
     {
-        _selectionCts.Cancel();
-        _selectionCts.Dispose();
-        _selectionCts = new CancellationTokenSource();
-        var token = _selectionCts.Token;
-
         _ = RunAsync();
 
         async Task RunAsync()
         {
-            try
-            {
-                await operation(token);
-            }
-            catch (OperationCanceledException)
-            {
-                Log.Debug("Selection change operation canceled.");
-            }
-            catch (Exception ex)
-            {
-                ShowError(errorMessage, ex);
-            }
+            await ExecuteRemoteReadTaskAsync(
+                loadingMessage: "Loading remote context...",
+                clearGridFirst: true,
+                showSpinnerAfterDelay: false,
+                errorMessage: errorMessage,
+                operation: async token =>
+                {
+                    await operation(token);
+                    return true;
+                },
+                onFailureRollbackAsync: null);
         }
     }
 
@@ -1657,6 +2437,19 @@ public partial class MainViewModel : ObservableObject
             .Select(x => x.Replace('\\', '/').Trim('/'))
             .Where(x => !string.IsNullOrWhiteSpace(x));
         return string.Join("/", normalized);
+    }
+
+    private static string BuildUniqueFolderName(Func<string, bool> exists, string baseName)
+    {
+        var normalizedBase = string.IsNullOrWhiteSpace(baseName) ? "New Folder" : baseName.Trim();
+        var candidate = normalizedBase;
+        var suffix = 1;
+        while (exists(candidate))
+        {
+            candidate = $"{normalizedBase} ({suffix++})";
+        }
+
+        return candidate;
     }
 
     private async Task<List<RemoteEntry>> ListRemoteFilesRecursivelyAsync(string directoryRelativePath, CancellationToken cancellationToken)
@@ -1981,6 +2774,14 @@ public partial class MainViewModel : ObservableObject
             (result.BatchCanceled ? ", batch canceled" : string.Empty);
         OnPropertyChanged(nameof(StatusQueueText));
     }
+
+    private sealed record RemoteViewSnapshot(
+        string Path,
+        List<RemoteEntry> Entries,
+        RemoteEntry? SelectedEntry,
+        List<RemoteEntry> SelectedEntries,
+        string? ContinuationToken,
+        bool HasMore);
 
     private sealed class QueueBatchResult
     {

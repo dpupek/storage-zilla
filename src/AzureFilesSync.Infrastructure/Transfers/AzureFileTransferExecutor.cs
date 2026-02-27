@@ -70,7 +70,7 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
 
         offset = Math.Clamp(offset, 0, totalBytes);
 
-        var fileClient = await GetRemoteFileClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
+        var fileClient = await GetRemoteFileClientAsync(request.RemotePath, cancellationToken, ensureRemotePathForUpload: true).ConfigureAwait(false);
         if (request.ConflictPolicy == TransferConflictPolicy.Ask &&
             await fileClient.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -337,7 +337,7 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         return props.Value.ContentLength;
     }
 
-    private async Task<ShareFileClient> GetRemoteFileClientAsync(SharePath path, CancellationToken cancellationToken)
+    private async Task<ShareFileClient> GetRemoteFileClientAsync(SharePath path, CancellationToken cancellationToken, bool ensureRemotePathForUpload = false)
     {
         var serviceClient = new ShareServiceClient(
             new Uri($"https://{path.StorageAccountName}.file.core.windows.net"),
@@ -347,7 +347,10 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
                 ShareTokenIntent = ShareTokenIntent.Backup
             });
         var shareClient = serviceClient.GetShareClient(path.ShareName);
-        await ExecuteWithRetryAsync(() => shareClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+        if (ensureRemotePathForUpload)
+        {
+            await ExecuteWithRetryAsync(() => shareClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
 
         var normalized = path.NormalizeRelativePath();
         var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -356,7 +359,10 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         foreach (var segment in segments.Take(Math.Max(0, segments.Length - 1)))
         {
             directoryClient = directoryClient.GetSubdirectoryClient(segment);
-            await ExecuteWithRetryAsync(() => directoryClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+            if (ensureRemotePathForUpload)
+            {
+                await ExecuteWithRetryAsync(() => directoryClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+            }
         }
 
         var fileName = segments.LastOrDefault();
