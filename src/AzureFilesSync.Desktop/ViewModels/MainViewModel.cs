@@ -1895,6 +1895,48 @@ public partial class MainViewModel : ObservableObject
         await LoadLocalDirectoryAsync();
     }
 
+    public async Task<DeleteBatchResult> DeleteLocalSelectionAsync(IList selectedRows, bool recursive)
+    {
+        var targets = selectedRows.Cast<object>()
+            .OfType<LocalEntry>()
+            .Where(x => x.Name != "..")
+            .GroupBy(x => x.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            var empty = new DeleteBatchResult(0, 0, 0);
+            SetDeleteBatchStatus("local", empty);
+            return empty;
+        }
+
+        var deleted = 0;
+        var failed = 0;
+        foreach (var target in targets)
+        {
+            try
+            {
+                await _localFileOperationsService.DeleteAsync(target.FullPath, recursive, CancellationToken.None);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Log.Warning(ex, "Failed to delete local entry {LocalPath}", target.FullPath);
+            }
+        }
+
+        if (deleted > 0)
+        {
+            await LoadLocalDirectoryAsync();
+        }
+
+        var result = new DeleteBatchResult(targets.Count, deleted, failed);
+        SetDeleteBatchStatus("local", result);
+        return result;
+    }
+
     public async Task RenameRemoteAsync(RemoteEntry? entry, string newName)
     {
         if (entry is null || entry.Name == ".." || string.IsNullOrWhiteSpace(newName) || SelectedStorageAccount is null || SelectedFileShare is null)
@@ -1921,6 +1963,58 @@ public partial class MainViewModel : ObservableObject
             recursive,
             CancellationToken.None);
         await LoadRemoteDirectoryAsync();
+    }
+
+    public async Task<DeleteBatchResult> DeleteRemoteSelectionAsync(IList selectedRows, bool recursive)
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            var noSelection = new DeleteBatchResult(0, 0, 0);
+            SetDeleteBatchStatus("remote", noSelection);
+            return noSelection;
+        }
+
+        var targets = selectedRows.Cast<object>()
+            .OfType<RemoteEntry>()
+            .Where(x => x.Name != "..")
+            .GroupBy(x => x.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            var empty = new DeleteBatchResult(0, 0, 0);
+            SetDeleteBatchStatus("remote", empty);
+            return empty;
+        }
+
+        var deleted = 0;
+        var failed = 0;
+        foreach (var target in targets)
+        {
+            try
+            {
+                await _remoteFileOperationsService.DeleteAsync(
+                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, target.FullPath),
+                    recursive,
+                    CancellationToken.None);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Log.Warning(ex, "Failed to delete remote entry {RemotePath}", target.FullPath);
+            }
+        }
+
+        if (deleted > 0)
+        {
+            await LoadRemoteDirectoryAsync();
+        }
+
+        var result = new DeleteBatchResult(targets.Count, deleted, failed);
+        SetDeleteBatchStatus("remote", result);
+        return result;
     }
 
     public async Task OpenLocalEntryAsync(LocalEntry? entry)
@@ -2775,6 +2869,21 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusQueueText));
     }
 
+    private void SetDeleteBatchStatus(string scope, DeleteBatchResult result)
+    {
+        if (result.Total == 0)
+        {
+            QueueBatchStatusMessage = $"No {scope} items selected for delete.";
+            OnPropertyChanged(nameof(StatusQueueText));
+            return;
+        }
+
+        QueueBatchStatusMessage = result.Failed == 0
+            ? $"Deleted {result.Deleted} {scope} item(s)."
+            : $"Deleted {result.Deleted} of {result.Total} {scope} item(s). Failed: {result.Failed}.";
+        OnPropertyChanged(nameof(StatusQueueText));
+    }
+
     private sealed record RemoteViewSnapshot(
         string Path,
         List<RemoteEntry> Entries,
@@ -2791,4 +2900,6 @@ public partial class MainViewModel : ObservableObject
         public int Conflicts { get; set; }
         public bool BatchCanceled { get; set; }
     }
+
+    public sealed record DeleteBatchResult(int Total, int Deleted, int Failed);
 }

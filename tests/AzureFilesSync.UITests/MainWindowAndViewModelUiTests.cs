@@ -192,6 +192,148 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_DeleteLocalSelection_SingleItem_DeletesAndSummarizes()
+    {
+        #region Arrange
+        var localOps = new RecordingLocalFileOperationsService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            localOps,
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        var selected = new ArrayList
+        {
+            new LocalEntry("one.txt", @"C:\tmp\one.txt", false, 12, DateTimeOffset.UtcNow)
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(localOps.DeletedPaths);
+        #endregion
+
+        #region Act
+        var result = await viewModel.DeleteLocalSelectionAsync(selected, recursive: true);
+        #endregion
+
+        #region Assert
+        Assert.Equal(1, result.Total);
+        Assert.Equal(1, result.Deleted);
+        Assert.Equal(0, result.Failed);
+        Assert.Equal([@"C:\tmp\one.txt"], localOps.DeletedPaths);
+        Assert.Equal("Deleted 1 local item(s).", viewModel.StatusQueueText);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_DeleteLocalSelection_MultiSelect_IgnoresParentAndDeletesAll()
+    {
+        #region Arrange
+        var localOps = new RecordingLocalFileOperationsService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            localOps,
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        var selected = new ArrayList
+        {
+            new LocalEntry("..", @"C:\tmp", true, 0, DateTimeOffset.UtcNow),
+            new LocalEntry("one.txt", @"C:\tmp\one.txt", false, 12, DateTimeOffset.UtcNow),
+            new LocalEntry("two.txt", @"C:\tmp\two.txt", false, 24, DateTimeOffset.UtcNow)
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(localOps.DeletedPaths);
+        #endregion
+
+        #region Act
+        var result = await viewModel.DeleteLocalSelectionAsync(selected, recursive: true);
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, result.Total);
+        Assert.Equal(2, result.Deleted);
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(2, localOps.DeletedPaths.Count);
+        Assert.Contains(@"C:\tmp\one.txt", localOps.DeletedPaths);
+        Assert.Contains(@"C:\tmp\two.txt", localOps.DeletedPaths);
+        Assert.Equal("Deleted 2 local item(s).", viewModel.StatusQueueText);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_DeleteRemoteSelection_MultiSelect_SummarizesFailures()
+    {
+        #region Arrange
+        var remoteOps = new RecordingRemoteFileOperationsService(["bad.txt"]);
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            remoteOps,
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+
+        var selected = new ArrayList
+        {
+            new RemoteEntry("..", string.Empty, true, 0, DateTimeOffset.UtcNow),
+            new RemoteEntry("ok.txt", "ok.txt", false, 1, DateTimeOffset.UtcNow),
+            new RemoteEntry("bad.txt", "bad.txt", false, 1, DateTimeOffset.UtcNow)
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(remoteOps.DeleteAttempts);
+        #endregion
+
+        #region Act
+        var result = await viewModel.DeleteRemoteSelectionAsync(selected, recursive: true);
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, result.Total);
+        Assert.Equal(1, result.Deleted);
+        Assert.Equal(1, result.Failed);
+        Assert.Equal(2, remoteOps.DeleteAttempts.Count);
+        Assert.Contains("ok.txt", remoteOps.DeleteAttempts.Select(x => x.NormalizeRelativePath()));
+        Assert.Contains("bad.txt", remoteOps.DeleteAttempts.Select(x => x.NormalizeRelativePath()));
+        Assert.Equal("Deleted 1 of 2 remote item(s). Failed: 1.", viewModel.StatusQueueText);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_LoadRemoteDirectory_UsesPaging_AndLoadMoreAppendsEntries()
     {
         #region Arrange
@@ -1262,6 +1404,51 @@ public sealed class MainWindowAndViewModelUiTests
         }
         public Task RenameAsync(SharePath path, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DeleteAsync(SharePath path, bool recursive, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingLocalFileOperationsService : ILocalFileOperationsService
+    {
+        public List<string> DeletedPaths { get; } = [];
+
+        public Task ShowInExplorerAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task OpenAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task OpenWithAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task CreateDirectoryAsync(string parentPath, string name, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task RenameAsync(string path, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken)
+        {
+            DeletedPaths.Add(path);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingRemoteFileOperationsService : IRemoteFileOperationsService
+    {
+        private readonly HashSet<string> _failingRelativePaths;
+
+        public RecordingRemoteFileOperationsService(IEnumerable<string>? failingRelativePaths = null)
+        {
+            _failingRelativePaths = new HashSet<string>(
+                failingRelativePaths ?? [],
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        public List<SharePath> DeleteAttempts { get; } = [];
+
+        public Task CreateDirectoryAsync(SharePath path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task RenameAsync(SharePath path, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task DeleteAsync(SharePath path, bool recursive, CancellationToken cancellationToken)
+        {
+            DeleteAttempts.Add(path);
+            if (_failingRelativePaths.Contains(path.NormalizeRelativePath()))
+            {
+                throw new InvalidOperationException("Simulated delete failure.");
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubMirrorPlannerService : IMirrorPlannerService

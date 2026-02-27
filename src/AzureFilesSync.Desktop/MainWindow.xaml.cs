@@ -5,6 +5,7 @@ using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -132,13 +133,25 @@ public partial class MainWindow : Window
 
     private async Task DeleteLocalAsync()
     {
-        if (DataContext is not MainViewModel vm || LocalGrid.SelectedItem is not LocalEntry entry || entry.Name == "..")
+        if (DataContext is not MainViewModel vm)
         {
             return;
         }
 
+        var selectedEntries = LocalGrid.SelectedItems.Count > 0
+            ? LocalGrid.SelectedItems.Cast<object>().OfType<LocalEntry>().Where(x => x.Name != "..").ToList()
+            : BuildFallbackSelection(LocalGrid.SelectedItem).Cast<object>().OfType<LocalEntry>().Where(x => x.Name != "..").ToList();
+
+        if (selectedEntries.Count == 0)
+        {
+            return;
+        }
+
+        var confirmMessage = selectedEntries.Count == 1
+            ? $"Delete '{selectedEntries[0].Name}'{(selectedEntries[0].IsDirectory ? " recursively" : string.Empty)}?"
+            : $"Delete {selectedEntries.Count} selected local items?";
         var confirm = MessageBox.Show(
-            $"Delete '{entry.Name}'{(entry.IsDirectory ? " recursively" : string.Empty)}?",
+            confirmMessage,
             "Delete Confirmation",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -149,7 +162,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await vm.DeleteLocalAsync(entry, recursive: true);
+            await vm.DeleteLocalSelectionAsync(selectedEntries, recursive: true);
         }
         catch (Exception ex)
         {
@@ -181,13 +194,25 @@ public partial class MainWindow : Window
 
     private async Task DeleteRemoteAsync()
     {
-        if (DataContext is not MainViewModel vm || RemoteGrid.SelectedItem is not RemoteEntry entry || entry.Name == "..")
+        if (DataContext is not MainViewModel vm)
         {
             return;
         }
 
+        var selectedEntries = RemoteGrid.SelectedItems.Count > 0
+            ? RemoteGrid.SelectedItems.Cast<object>().OfType<RemoteEntry>().Where(x => x.Name != "..").ToList()
+            : BuildFallbackSelection(RemoteGrid.SelectedItem).Cast<object>().OfType<RemoteEntry>().Where(x => x.Name != "..").ToList();
+
+        if (selectedEntries.Count == 0)
+        {
+            return;
+        }
+
+        var confirmMessage = selectedEntries.Count == 1
+            ? $"Delete remote '{selectedEntries[0].Name}'{(selectedEntries[0].IsDirectory ? " recursively" : string.Empty)}?"
+            : $"Delete {selectedEntries.Count} selected remote items?";
         var confirm = MessageBox.Show(
-            $"Delete remote '{entry.Name}'{(entry.IsDirectory ? " recursively" : string.Empty)}?",
+            confirmMessage,
             "Delete Confirmation",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -198,7 +223,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await vm.DeleteRemoteAsync(entry, recursive: true);
+            await vm.DeleteRemoteSelectionAsync(selectedEntries, recursive: true);
         }
         catch (Exception ex)
         {

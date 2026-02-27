@@ -80,6 +80,7 @@
 - [x] Add clearer DNS/network failure guidance that explicitly mentions antivirus/proxy/firewall allow rules for Azure Files endpoints.
 - [x] Add a `Copy diagnostics` action for share discovery failures (endpoint + exception summary).
 - [x] Add preflight endpoint connectivity validation for selected storage accounts to fail fast before long share-enumeration retries.
+- [x] Apply delete actions to full local/remote multi-selection with count-based confirmation and status summaries.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.
