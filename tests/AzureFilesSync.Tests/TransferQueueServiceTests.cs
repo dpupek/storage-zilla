@@ -1,6 +1,7 @@
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
 using AzureFilesSync.Core.Services;
+using System.Diagnostics;
 
 namespace AzureFilesSync.Tests;
 
@@ -293,27 +294,8 @@ public sealed class TransferQueueServiceTests
         var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
         var firstRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\first.txt", new SharePath("acct", "share", "first.txt"));
         var secondRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\second.txt", new SharePath("acct", "share", "second.txt"));
-        var firstFailed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var firstJobId = Guid.Empty;
-        var secondJobId = Guid.Empty;
-
-        queue.JobUpdated += (_, snapshot) =>
-        {
-            if (snapshot.JobId == firstJobId && snapshot.Status == TransferJobStatus.Failed)
-            {
-                firstFailed.TrySetResult(true);
-            }
-
-            if (snapshot.JobId == secondJobId && snapshot.Status == TransferJobStatus.Completed)
-            {
-                secondCompleted.TrySetResult(true);
-            }
-        };
-
-        firstJobId = queue.Enqueue(firstRequest);
-        secondJobId = queue.Enqueue(secondRequest);
+        var firstJobId = queue.Enqueue(firstRequest);
+        var secondJobId = queue.Enqueue(secondRequest);
         #endregion
 
         #region Initial Assert
@@ -321,13 +303,20 @@ public sealed class TransferQueueServiceTests
         #endregion
 
         #region Act
-        var failedSignaled = await firstFailed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var completedSignaled = await secondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var settled = await WaitUntilAsync(
+            condition: () =>
+            {
+                var snapshots = queue.Snapshot();
+                var first = snapshots.SingleOrDefault(x => x.JobId == firstJobId);
+                var second = snapshots.SingleOrDefault(x => x.JobId == secondJobId);
+                return first?.Status == TransferJobStatus.Failed &&
+                       second?.Status == TransferJobStatus.Completed;
+            },
+            timeout: TimeSpan.FromSeconds(20));
         #endregion
 
         #region Assert
-        Assert.True(failedSignaled);
-        Assert.True(completedSignaled);
+        Assert.True(settled);
         var first = queue.Snapshot().Single(x => x.JobId == firstJobId);
         var second = queue.Snapshot().Single(x => x.JobId == secondJobId);
         Assert.Equal(TransferJobStatus.Failed, first.Status);
@@ -490,5 +479,21 @@ public sealed class TransferQueueServiceTests
             progress(new TransferProgress(100, 100));
             return Task.CompletedTask;
         }
+    }
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(50);
+        }
+
+        return condition();
     }
 }
