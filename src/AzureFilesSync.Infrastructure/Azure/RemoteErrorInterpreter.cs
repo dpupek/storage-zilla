@@ -1,6 +1,8 @@
 using Azure;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
+using System.Net.Http;
+using System.Net.Sockets;
 
 namespace AzureFilesSync.Infrastructure.Azure;
 
@@ -13,6 +15,11 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
         if (!context.IsValid)
         {
             return RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and file share.");
+        }
+
+        if (TryMapEndpointFailure(exception, context, out var endpointFailure))
+        {
+            return endpointFailure;
         }
 
         if (exception is RequestFailedException requestFailed)
@@ -89,5 +96,84 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
             false,
             "Unexpected remote access error.",
             DateTimeOffset.UtcNow);
+    }
+
+    private static bool TryMapEndpointFailure(Exception exception, RemoteContext context, out RemoteCapabilitySnapshot snapshot)
+    {
+        if (!ContainsHostNotFoundFailure(exception))
+        {
+            snapshot = null!;
+            return false;
+        }
+
+        var endpointHost = $"{context.StorageAccountName}.file.core.windows.net";
+        var message =
+            $"Cannot reach Azure Files endpoint '{endpointHost}'. " +
+            "Check DNS resolution, firewall/antivirus/proxy allowlists for '*.file.core.windows.net', " +
+            "or private endpoint DNS configuration for this storage account.";
+
+        snapshot = new RemoteCapabilitySnapshot(
+            RemoteAccessState.EndpointUnavailable,
+            false,
+            false,
+            false,
+            false,
+            false,
+            message,
+            DateTimeOffset.UtcNow,
+            "DnsHostNotFound");
+
+        return true;
+    }
+
+    private static bool ContainsHostNotFoundFailure(Exception exception)
+    {
+        foreach (var current in EnumerateExceptions(exception))
+        {
+            if (current is SocketException socketException && socketException.SocketErrorCode == SocketError.HostNotFound)
+            {
+                return true;
+            }
+
+            if (current is HttpRequestException httpRequestException &&
+                httpRequestException.Message.Contains("No such host is known", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (current.Message.Contains("No such host is known", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Exception> EnumerateExceptions(Exception exception)
+    {
+        var stack = new Stack<Exception>();
+        stack.Push(exception);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            yield return current;
+
+            if (current is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (inner is not null)
+                    {
+                        stack.Push(inner);
+                    }
+                }
+            }
+            else if (current.InnerException is not null)
+            {
+                stack.Push(current.InnerException);
+            }
+        }
     }
 }

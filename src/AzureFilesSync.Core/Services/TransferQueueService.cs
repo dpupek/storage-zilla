@@ -239,7 +239,15 @@ public sealed class TransferQueueService : ITransferQueueService
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await _workerSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _workerSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (!TryClaimNextQueued(out var next))
             {
                 continue;
@@ -247,6 +255,7 @@ public sealed class TransferQueueService : ITransferQueueService
 
             TransferJobSnapshot runningSnapshot;
             CancellationToken transferCancellation;
+            var claimedLockReleased = false;
             try
             {
                 next.JobCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -257,9 +266,46 @@ public sealed class TransferQueueService : ITransferQueueService
                 Publish(next.Snapshot);
                 runningSnapshot = next.Snapshot;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                next.JobCancellation?.Dispose();
+                next.JobCancellation = null;
+                claimedLockReleased = true;
+                next.Lock.Release();
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                next.Snapshot = next.Snapshot with { Status = TransferJobStatus.Canceled, Message = "Canceled" };
+                Publish(next.Snapshot);
+                next.JobCancellation?.Dispose();
+                next.JobCancellation = null;
+                claimedLockReleased = true;
+                next.Lock.Release();
+                continue;
+            }
+            catch (Exception ex)
+            {
+                var isUnresolvedAskConflict = ex.Message.Contains("Ask policy was unresolved", StringComparison.OrdinalIgnoreCase);
+                next.Snapshot = next.Snapshot with
+                {
+                    Status = isUnresolvedAskConflict ? TransferJobStatus.Canceled : TransferJobStatus.Failed,
+                    Message = ex.Message
+                };
+                Publish(next.Snapshot);
+                next.JobCancellation?.Dispose();
+                next.JobCancellation = null;
+                claimedLockReleased = true;
+                next.Lock.Release();
+                continue;
+            }
             finally
             {
-                next.Lock.Release();
+                if (!claimedLockReleased)
+                {
+                    next.Lock.Release();
+                    claimedLockReleased = true;
+                }
             }
 
             try
@@ -284,7 +330,7 @@ public sealed class TransferQueueService : ITransferQueueService
             }
             catch (OperationCanceledException)
             {
-                await next.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await next.Lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
                 try
                 {
                     if (next.PauseRequested)
@@ -315,11 +361,11 @@ public sealed class TransferQueueService : ITransferQueueService
             }
             finally
             {
-                await next.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await next.Lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
                 try
                 {
-                next.JobCancellation?.Dispose();
-                next.JobCancellation = null;
+                    next.JobCancellation?.Dispose();
+                    next.JobCancellation = null;
                 }
                 finally
                 {

@@ -41,6 +41,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IConnectionProfileStore _connectionProfileStore;
     private readonly IRemoteCapabilityService _remoteCapabilityService;
     private readonly IRemoteActionPolicyService _remoteActionPolicyService;
+    private readonly IRemoteErrorInterpreter _remoteErrorInterpreter;
     private readonly IAppUpdateService _appUpdateService;
 
     private MirrorPlan? _lastMirrorPlan;
@@ -231,6 +232,7 @@ public partial class MainViewModel : ObservableObject
         IConnectionProfileStore connectionProfileStore,
         IRemoteCapabilityService remoteCapabilityService,
         IRemoteActionPolicyService remoteActionPolicyService,
+        IRemoteErrorInterpreter remoteErrorInterpreter,
         IAppUpdateService appUpdateService)
     {
         _authenticationService = authenticationService;
@@ -247,6 +249,7 @@ public partial class MainViewModel : ObservableObject
         _connectionProfileStore = connectionProfileStore;
         _remoteCapabilityService = remoteCapabilityService;
         _remoteActionPolicyService = remoteActionPolicyService;
+        _remoteErrorInterpreter = remoteErrorInterpreter;
         _appUpdateService = appUpdateService;
         UpdateChannel = _appUpdateService.CurrentChannel;
 
@@ -327,12 +330,14 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task LoadRemoteDirectoryAsync()
+    private Task LoadRemoteDirectoryAsync() => LoadRemoteDirectoryCoreAsync(CancellationToken.None);
+
+    private async Task LoadRemoteDirectoryCoreAsync(CancellationToken cancellationToken)
     {
         try
         {
             var context = BuildRemoteContext();
-            var capability = await _remoteCapabilityService.RefreshAsync(context, CancellationToken.None);
+            var capability = await _remoteCapabilityService.RefreshAsync(context, cancellationToken);
             ApplyCapability(capability);
 
             if (!capability.CanBrowse)
@@ -344,7 +349,7 @@ public partial class MainViewModel : ObservableObject
 
             RemoteEntries.Clear();
             var path = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
-            foreach (var item in await _azureFilesBrowserService.ListDirectoryAsync(path, CancellationToken.None))
+            foreach (var item in await _azureFilesBrowserService.ListDirectoryAsync(path, cancellationToken))
             {
                 RemoteEntries.Add(item);
             }
@@ -359,7 +364,11 @@ public partial class MainViewModel : ObservableObject
                 context.ShareName,
                 context.Path);
         }
-        catch (RequestFailedException ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Log.Debug("Remote read operation canceled or replaced.");
+        }
+        catch (Exception ex)
         {
             var context = BuildRemoteContext();
             var capability = await _remoteCapabilityService.RefreshAsync(context, CancellationToken.None);
@@ -367,18 +376,16 @@ public partial class MainViewModel : ObservableObject
             RemoteEntries.Clear();
             RemoteGridEntries.Clear();
 
-            if (capability.State is RemoteAccessState.PermissionDenied or RemoteAccessState.NotFound or RemoteAccessState.TransientFailure)
+            if (capability.State is
+                RemoteAccessState.PermissionDenied or
+                RemoteAccessState.NotFound or
+                RemoteAccessState.TransientFailure or
+                RemoteAccessState.EndpointUnavailable)
             {
                 Log.Warning(ex, "Remote directory load mapped to capability state {State}", capability.State);
                 return;
             }
 
-            ShowError("Failed to load remote directory.", ex);
-        }
-        catch (Exception ex)
-        {
-            RemoteEntries.Clear();
-            RemoteGridEntries.Clear();
             ShowError("Failed to load remote directory.", ex);
         }
     }
@@ -773,7 +780,7 @@ public partial class MainViewModel : ObservableObject
             async token =>
             {
                 token.ThrowIfCancellationRequested();
-                await LoadRemoteDirectoryAsync();
+                await LoadRemoteDirectoryCoreAsync(token);
                 token.ThrowIfCancellationRequested();
                 await PersistProfileAsync();
             },
@@ -889,24 +896,49 @@ public partial class MainViewModel : ObservableObject
                 }
             }
         }
-        catch (RequestFailedException ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            Log.Debug("File share load canceled or replaced for {StorageAccountName}", account.Name);
+            return;
+        }
+        catch (Exception ex)
+        {
+            var endpointHost = $"{account.Name}.file.core.windows.net";
             RemoteEntries.Clear();
             RemoteGridEntries.Clear();
-            var capability = _remoteCapabilityService.GetLastKnown(BuildRemoteContext())
-                ?? new RemoteCapabilitySnapshot(
-                    RemoteAccessState.Unknown,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    $"Cannot list shares for '{account.Name}' (HTTP {ex.Status}).",
-                    DateTimeOffset.UtcNow,
-                    ex.ErrorCode,
-                    ex.Status);
-            ApplyCapability(capability with { UserMessage = $"Cannot list shares for '{account.Name}' (HTTP {ex.Status}). Verify Azure Files data access." });
-            LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' ({ex.Status}).";
+            FileShares.Clear();
+            SetSelectionSilently(() => SelectedFileShare = null);
+
+            var discoveryContext = new RemoteContext(account.Name, "_discovery", string.Empty, SelectedSubscription?.Id);
+            var capability = _remoteErrorInterpreter.Interpret(ex, discoveryContext);
+            ApplyCapability(capability);
+
+            if (capability.State == RemoteAccessState.EndpointUnavailable)
+            {
+                Log.Warning(
+                    ex,
+                    "Storage endpoint preflight failed for {StorageAccount}. Endpoint={EndpointHost}. Reason={FailureKind}.",
+                    account.Name,
+                    endpointHost,
+                    capability.ErrorCode ?? "Unknown");
+                LoginStatus = $"Signed in. Cannot reach Azure Files endpoint for '{account.Name}'.";
+                return;
+            }
+
+            if (capability.State is RemoteAccessState.PermissionDenied or RemoteAccessState.NotFound or RemoteAccessState.TransientFailure)
+            {
+                Log.Warning(
+                    ex,
+                    "Cannot list shares for storage account {StorageAccount}. State={RemoteState}. ErrorCode={ErrorCode}. HttpStatus={HttpStatus}.",
+                    account.Name,
+                    capability.State,
+                    capability.ErrorCode,
+                    capability.HttpStatus);
+                LoginStatus = $"Signed in. {capability.UserMessage}";
+                return;
+            }
+
+            ShowError("Failed to load file shares for selected storage account.", ex);
             return;
         }
 
@@ -920,7 +952,7 @@ public partial class MainViewModel : ObservableObject
         Log.Debug("Loaded {ShareCount} file shares for {StorageAccountName}", FileShares.Count, account.Name);
 
         cancellationToken.ThrowIfCancellationRequested();
-        await LoadRemoteDirectoryAsync();
+        await LoadRemoteDirectoryCoreAsync(cancellationToken);
     }
 
     private async Task LoadLocalProfileDefaultsAsync()
@@ -1176,7 +1208,7 @@ public partial class MainViewModel : ObservableObject
             new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
             newName.Trim(),
             CancellationToken.None);
-        await LoadRemoteDirectoryAsync();
+        await LoadRemoteDirectoryCoreAsync(CancellationToken.None);
     }
 
     public async Task DeleteRemoteAsync(RemoteEntry? entry, bool recursive)
@@ -1190,7 +1222,7 @@ public partial class MainViewModel : ObservableObject
             new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
             recursive,
             CancellationToken.None);
-        await LoadRemoteDirectoryAsync();
+        await LoadRemoteDirectoryCoreAsync(CancellationToken.None);
     }
 
     public async Task OpenLocalEntryAsync(LocalEntry? entry)
@@ -1212,7 +1244,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         RemotePath = entry.FullPath;
-        await LoadRemoteDirectoryAsync();
+        await LoadRemoteDirectoryCoreAsync(CancellationToken.None);
     }
 
     public async Task UpdateGridLayoutsAsync(GridLayoutProfile? local, GridLayoutProfile? remote)
@@ -1309,7 +1341,7 @@ public partial class MainViewModel : ObservableObject
                 }
 
                 _lastRemoteRefreshUtc = now;
-                await LoadRemoteDirectoryAsync();
+                await LoadRemoteDirectoryCoreAsync(CancellationToken.None);
             }
             else
             {

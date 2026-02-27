@@ -79,6 +79,14 @@
 - [x] Add MSI install UX: license dialog, install directory selection, Start Menu shortcut.
 - [x] Brand MSI welcome/license banner assets from project logo set.
 
+## Phase 10: Runtime Reliability + Network UX (child-0009)
+- [x] Prevent transfer worker crashes from unobserved estimate-phase exceptions; continue processing subsequent jobs.
+- [x] Marshal error dialogs safely to the UI dispatcher for background/unobserved exception paths.
+- [x] Classify endpoint host-resolution failures as a distinct remote capability state (`EndpointUnavailable`).
+- [x] Show actionable non-modal guidance for account-specific Azure Files DNS endpoint failures.
+- [x] Treat superseded/canceled remote read operations as expected debug-level behavior.
+- [x] Create and link follow-up GitHub issues #14, #15, and #16 from issue #13 triage.
+
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.

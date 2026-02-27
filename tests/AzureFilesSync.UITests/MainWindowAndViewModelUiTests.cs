@@ -487,6 +487,7 @@ public sealed class MainWindowAndViewModelUiTests
         IConnectionProfileStore profileStore,
         IRemoteCapabilityService remoteCapabilityService,
         IRemoteActionPolicyService remoteActionPolicyService,
+        IRemoteErrorInterpreter? remoteErrorInterpreter = null,
         IAppUpdateService? appUpdateService = null) =>
         new(
             authenticationService,
@@ -503,6 +504,7 @@ public sealed class MainWindowAndViewModelUiTests
             profileStore,
             remoteCapabilityService,
             remoteActionPolicyService,
+            remoteErrorInterpreter ?? new StubRemoteErrorInterpreter(),
             appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.")));
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
@@ -776,6 +778,20 @@ public sealed class MainWindowAndViewModelUiTests
                 CanEnqueueDownload: capability?.State == RemoteAccessState.Accessible && inputs.HasSelectedRemoteFile,
                 CanPlanMirror: capability?.State == RemoteAccessState.Accessible && !inputs.IsMirrorPlanning,
                 CanExecuteMirror: capability?.State == RemoteAccessState.Accessible && inputs.HasMirrorPlan);
+    }
+
+    private sealed class StubRemoteErrorInterpreter : IRemoteErrorInterpreter
+    {
+        public RemoteCapabilitySnapshot Interpret(Exception exception, RemoteContext context) =>
+            new(
+                RemoteAccessState.Unknown,
+                CanBrowse: false,
+                CanUpload: false,
+                CanDownload: false,
+                CanPlanMirror: false,
+                CanExecuteMirror: false,
+                UserMessage: exception.Message,
+                EvaluatedUtc: DateTimeOffset.UtcNow);
     }
 
     private sealed class StubAppUpdateService : IAppUpdateService

@@ -284,6 +284,45 @@ public sealed class TransferQueueServiceTests
         #endregion
     }
 
+    [Fact]
+    public async Task EstimateFailure_FailsJob_AndWorkerContinuesWithNextJob()
+    {
+        #region Arrange
+        var executor = new EstimateFailureExecutor();
+        var checkpoints = new InMemoryCheckpointStore();
+        var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
+        var failedRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\fail.txt", new SharePath("acct", "share", "fail.txt"));
+        var successfulRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\ok.txt", new SharePath("acct", "share", "ok.txt"));
+        var failedId = queue.Enqueue(failedRequest);
+        var successId = queue.Enqueue(successfulRequest);
+        using var completed = new ManualResetEventSlim(false);
+
+        queue.JobUpdated += (_, snapshot) =>
+        {
+            if (snapshot.JobId == successId && snapshot.Status == TransferJobStatus.Completed)
+            {
+                completed.Set();
+            }
+        };
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(2, queue.Snapshot().Count);
+        #endregion
+
+        #region Act
+        var signaled = completed.Wait(TimeSpan.FromSeconds(5));
+        #endregion
+
+        #region Assert
+        Assert.True(signaled);
+        var failed = queue.Snapshot().Single(x => x.JobId == failedId);
+        var succeeded = queue.Snapshot().Single(x => x.JobId == successId);
+        Assert.Equal(TransferJobStatus.Failed, failed.Status);
+        Assert.Equal(TransferJobStatus.Completed, succeeded.Status);
+        #endregion
+    }
+
     private sealed class StubTransferExecutor : ITransferExecutor
     {
         public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken) => Task.FromResult(100L);
@@ -364,6 +403,25 @@ public sealed class TransferQueueServiceTests
         public Task ExecuteAsync(Guid jobId, TransferRequest request, TransferCheckpoint? checkpoint, Action<TransferProgress> progress, CancellationToken cancellationToken)
         {
             throw new InvalidOperationException(_message);
+        }
+    }
+
+    private sealed class EstimateFailureExecutor : ITransferExecutor
+    {
+        public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken)
+        {
+            if (request.LocalPath.Contains("fail", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Estimate failed.");
+            }
+
+            return Task.FromResult(100L);
+        }
+
+        public Task ExecuteAsync(Guid jobId, TransferRequest request, TransferCheckpoint? checkpoint, Action<TransferProgress> progress, CancellationToken cancellationToken)
+        {
+            progress(new TransferProgress(100, 100));
+            return Task.CompletedTask;
         }
     }
 }
