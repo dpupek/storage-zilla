@@ -17,6 +17,12 @@ public sealed record RemoteEntry(
     DateTimeOffset? LastWriteTime,
     DateTimeOffset? CreatedTime = null,
     string? Author = null);
+
+public sealed record RemoteDirectoryPage(
+    IReadOnlyList<RemoteEntry> Entries,
+    string? ContinuationToken,
+    bool HasMore);
+
 public sealed record SharePath(string StorageAccountName, string ShareName, string RelativePath)
 {
     public string NormalizeRelativePath()

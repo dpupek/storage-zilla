@@ -186,6 +186,8 @@ jobs:
             $thumbprint = $cert.Thumbprint
             Write-Host "Signing certificate validated. Subject: $($cert.Subject); Thumbprint: $thumbprint"
             "MSIX_CERT_THUMBPRINT=$thumbprint" >> $env:GITHUB_ENV
+            "MSIX_CERT_SUBJECT=$($cert.Subject)" >> $env:GITHUB_ENV
+            "MSIX_CERT_NOT_AFTER=$($cert.NotAfter.ToString('u'))" >> $env:GITHUB_ENV
             $cert.Dispose()
           } catch {
             throw "Unable to open MSIX signing certificate. Verify MSIX_CERT_BASE64 and MSIX_CERT_PASSWORD were created from the same PFX export. Details: $($_.Exception.Message)"
@@ -326,6 +328,61 @@ jobs:
 
           "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
 
+      - name: Build portable zip package
+        id: zip_artifact
+        shell: pwsh
+        run: |
+          $zipOutDir = Join-Path $env:RUNNER_TEMP "zip"
+          New-Item -ItemType Directory -Path $zipOutDir -Force | Out-Null
+          $zipPath = Join-Path $zipOutDir "StorageZilla_${{ steps.version.outputs.version }}_win-x64_portable.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path (Join-Path "$env:MSI_PUBLISH_DIR" '*') -DestinationPath $zipPath -CompressionLevel Optimal
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+
+      - name: Export public signing certificate
+        id: cert_artifact
+        shell: pwsh
+        run: |
+          $certOutDir = Join-Path $env:RUNNER_TEMP "cert"
+          New-Item -ItemType Directory -Path $certOutDir -Force | Out-Null
+          $cerPath = Join-Path $certOutDir "StorageZilla-Signing-PublicKey.cer"
+          Export-Certificate -Cert "Cert:\CurrentUser\My\$env:MSIX_CERT_THUMBPRINT" -FilePath $cerPath -Type CERT | Out-Null
+          "cer_path=$cerPath" >> $env:GITHUB_OUTPUT
+
+      - name: Write release notes artifact
+        id: notes_artifact
+        shell: pwsh
+        run: |
+          $notesOutDir = Join-Path $env:RUNNER_TEMP "notes"
+          New-Item -ItemType Directory -Path $notesOutDir -Force | Out-Null
+          $notesPath = Join-Path $notesOutDir "RELEASE-NOTES.md"
+          $channel = "${{ inputs.channel }}"
+          $lines = @(
+            "# Storage Zilla Release Notes"
+            ""
+            "## Release"
+            "- Version: ${{ steps.version.outputs.version }}"
+            "- Tag: ${{ steps.version.outputs.tag }}"
+            "- Channel: $channel"
+            ""
+            "## Artifacts"
+            "- Signed MSIX package"
+            "- Unsigned MSI package"
+            "- Portable ZIP package (self-contained binaries)"
+            "- SHA256 checksums (SHA256SUMS.txt)"
+            "- Public signing certificate (StorageZilla-Signing-PublicKey.cer)"
+            ""
+            "## Trust"
+            "- Certificate Subject: $env:MSIX_CERT_SUBJECT"
+            "- Certificate Thumbprint: $env:MSIX_CERT_THUMBPRINT"
+            "- Certificate Expiration (UTC): $env:MSIX_CERT_NOT_AFTER"
+          )
+          Set-Content -Path $notesPath -Value $lines -Encoding UTF8
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+
       - name: Resolve MSIX artifact
         id: artifact
         shell: pwsh
@@ -342,6 +399,8 @@ jobs:
           $hashes = @(
             Get-FileHash "${{ steps.artifact.outputs.msix_path }}" -Algorithm SHA256
             Get-FileHash "${{ steps.msi_artifact.outputs.msi_path }}" -Algorithm SHA256
+            Get-FileHash "${{ steps.zip_artifact.outputs.zip_path }}" -Algorithm SHA256
+            Get-FileHash "${{ steps.cert_artifact.outputs.cer_path }}" -Algorithm SHA256
           )
           $line = $hashes | ForEach-Object { "$($_.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($_.Path))" }
           $shaPath = Join-Path (Split-Path "${{ steps.artifact.outputs.msix_path }}" -Parent) "SHA256SUMS.txt"
@@ -358,4 +417,7 @@ jobs:
           files: |
             ${{ steps.artifact.outputs.msix_path }}
             ${{ steps.msi_artifact.outputs.msi_path }}
+            ${{ steps.zip_artifact.outputs.zip_path }}
+            ${{ steps.cert_artifact.outputs.cer_path }}
+            ${{ steps.notes_artifact.outputs.notes_path }}
             ${{ runner.temp }}\msix\SHA256SUMS.txt

@@ -9,6 +9,8 @@
 - [x] Implement interactive auth service.
 - [x] Implement subscription/storage/file share discovery.
 - [x] Wire left/right pane directory loaders.
+- [x] Add WAM-first sign-in with automatic system-browser fallback when broker prerequisites are unavailable.
+- [x] Keep sign-in session active when profile restore hits DNS-unreachable or unavailable Azure Files endpoints; show a friendly non-blocking message instead of failing the entire sign-in.
 
 ## Phase 3: Transfer Queue (child-0002)
 - [x] Implement transfer queue service.
@@ -69,12 +71,22 @@
 - [x] Correct queue progress display for zero-byte completed transfers (`100% (0/0)`).
 - [x] Relabel queue columns to explicit `Local` and `Remote` paths.
 - [x] Temporarily hide mirror planning/execution controls pending dedicated mirror conflict UX.
+- [x] Expand end-user documentation into task-oriented guides (getting started, UI tour, transfers, queue, controls, troubleshooting).
+- [x] Replace static help popup with embedded in-app help docs viewer.
+- [x] Ensure embedded help supports internal doc navigation and local image rendering.
+- [x] Enforce single-instance desktop app startup.
+- [x] Harden app icon initialization to avoid startup crashes from missing/invalid pack URI resources.
+- [x] Surface authentication mode/fallback context in status/logging to aid support diagnostics.
+- [x] Add clearer DNS/network failure guidance that explicitly mentions antivirus/proxy/firewall allow rules for Azure Files endpoints.
+- [x] Add a `Copy diagnostics` action for share discovery failures (endpoint + exception summary).
+- [x] Add preflight endpoint connectivity validation for selected storage accounts to fail fast before long share-enumeration retries.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.
 - [x] Add GitHub latest stable release lookup and installer asset discovery.
 - [x] Add update download + SHA256 + publisher/version validation before install launch.
 - [x] Add update channel selection (`Stable`/`Beta`) and persist it in profile/settings.
+- [x] Update in-app update check UX to open the newer GitHub release page directly.
 - [x] Add unsigned MSI artifact publishing alongside signed MSIX in release pipeline.
 - [x] Add MSI install UX: license dialog, install directory selection, Start Menu shortcut.
 - [x] Brand MSI welcome/license banner assets from project logo set.

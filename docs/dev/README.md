@@ -51,6 +51,8 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
     - `prod` -> `x.y.z.20000`
   - This ensures beta-to-prod installs upgrade in place without requiring uninstall for same base version.
   - Also publishes an unsigned `x64` MSI artifact for internal/manual install scenarios.
+  - Also publishes a portable `win-x64` ZIP package with self-contained binaries.
+  - Also publishes a public signing certificate (`StorageZilla-Signing-PublicKey.cer`) and `RELEASE-NOTES.md`.
 
 ### Trigger a Beta Release
 1. Merge/promote changes from `dev` to `beta`.
@@ -100,6 +102,16 @@ git push origin beta
 - Release workflow also builds an unsigned MSI (`StorageZilla_<version>_x64_unsigned.msi`) using WiX.
 - MSI is attached to the GitHub release for manual/internal installation.
 - The MSI is intentionally unsigned and will show Windows trust warnings.
+
+## Portable ZIP Artifact
+- Release workflow also builds a portable ZIP (`StorageZilla_<version>_win-x64_portable.zip`) from the published desktop payload.
+- ZIP is attached to the GitHub release for no-installer execution scenarios.
+- ZIP includes runtime dependencies and binaries from `dotnet publish` output.
+
+## Release Trust + Notes Artifacts
+- `StorageZilla-Signing-PublicKey.cer`: public certificate for trust/import workflows.
+- `RELEASE-NOTES.md`: release metadata and trust details (subject/thumbprint/expiration).
+- `SHA256SUMS.txt` includes checksums for MSIX, MSI, ZIP, and CER assets.
 
 ## Logging
 - Serilog file sink is enabled.

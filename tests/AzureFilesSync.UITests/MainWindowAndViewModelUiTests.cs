@@ -1,3 +1,4 @@
+using Azure;
 using Azure.Core;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
@@ -7,6 +8,8 @@ using AzureFilesSync.Desktop.Services;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
 using System.IO;
+using System.Net.Http;
+using System.Net.Sockets;
 using Xunit;
 
 namespace AzureFilesSync.UITests;
@@ -161,6 +164,197 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_EnqueueDownload_UsesAllSelectedRemoteEntries()
+    {
+        #region Arrange
+        var viewModel = CreateViewModel(out var queue);
+        SetValidRemoteSelection(viewModel);
+        var first = new RemoteEntry("a.txt", "a.txt", false, 10, DateTimeOffset.UtcNow);
+        var second = new RemoteEntry("b.txt", "b.txt", false, 20, DateTimeOffset.UtcNow);
+        viewModel.SelectedRemoteEntry = first;
+        viewModel.UpdateSelectedRemoteSelection(new ArrayList { first, second });
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.EnqueueDownloadCommand.CanExecute(null));
+        Assert.Empty(queue.EnqueuedRequests);
+        #endregion
+
+        #region Act
+        await viewModel.EnqueueDownloadCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, queue.EnqueuedRequests.Count);
+        Assert.Contains(queue.EnqueuedRequests, x => string.Equals(x.RemotePath.NormalizeRelativePath(), "a.txt", StringComparison.Ordinal));
+        Assert.Contains(queue.EnqueuedRequests, x => string.Equals(x.RemotePath.NormalizeRelativePath(), "b.txt", StringComparison.Ordinal));
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_LoadRemoteDirectory_UsesPaging_AndLoadMoreAppendsEntries()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        var rootEntries = new List<RemoteEntry>
+        {
+            new("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)
+        };
+        var nextEntries = new List<RemoteEntry>
+        {
+            new("file-b.txt", "file-b.txt", false, 15, DateTimeOffset.UtcNow)
+        };
+        browser.ListDirectoryPageBehavior = (path, continuation, _) =>
+            continuation is null
+                ? new RemoteDirectoryPage(rootEntries, "page-2", true)
+                : new RemoteDirectoryPage(nextEntries, null, false);
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        #endregion
+
+        #region Act
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        await viewModel.LoadMoreRemoteEntriesCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, viewModel.RemoteEntries.Count);
+        Assert.Contains(viewModel.RemoteEntries, x => x.Name == "folder-a");
+        Assert.Contains(viewModel.RemoteEntries, x => x.Name == "file-b.txt");
+        Assert.False(viewModel.HasMoreRemoteEntries);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_OpenRemoteEntry_Failure_RestoresPreviousView()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageBehavior = (path, _, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(path.NormalizeRelativePath()))
+            {
+                return new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false);
+            }
+
+            throw new InvalidOperationException("Simulated remote failure.");
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        var directory = Assert.Single(viewModel.RemoteEntries);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Equal("folder-a", directory.Name);
+        #endregion
+
+        #region Act
+        await viewModel.OpenRemoteEntryAsync(directory);
+        #endregion
+
+        #region Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("folder-a", viewModel.RemoteEntries[0].Name);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_OpenRemoteEntry_WhenLoadTimesOut_RestoresPreviousView()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageAsyncBehavior = async (path, _, _, cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(path.NormalizeRelativePath()))
+            {
+                return new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            return new RemoteDirectoryPage([], null, false);
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService(),
+            remoteOpenDirectoryTimeout: TimeSpan.FromMilliseconds(50));
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        var directory = Assert.Single(viewModel.RemoteEntries);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Equal("folder-a", directory.Name);
+        #endregion
+
+        #region Act
+        await viewModel.OpenRemoteEntryAsync(directory);
+        #endregion
+
+        #region Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("folder-a", viewModel.RemoteEntries[0].Name);
+        Assert.Contains("timed out", viewModel.StatusQueueText, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_PauseAllQueue_CallsTransferQueueService()
     {
         #region Arrange
@@ -181,6 +375,243 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_ClearCompletedCanceledQueue_PurgesAndRefreshesQueue()
+    {
+        #region Arrange
+        var viewModel = CreateViewModel(out var queue);
+        var completed = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(TransferDirection.Upload, @"C:\tmp\a.txt", new SharePath("acct", "share", "a.txt")),
+            TransferJobStatus.Completed,
+            100,
+            100,
+            "Completed",
+            0);
+        var canceled = completed with { JobId = Guid.NewGuid(), Status = TransferJobStatus.Canceled, Message = "Canceled" };
+        var running = completed with { JobId = Guid.NewGuid(), Status = TransferJobStatus.Running, Message = null };
+        queue.SnapshotItems.AddRange([completed, canceled, running]);
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = completed });
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = canceled });
+        viewModel.QueueItems.Add(new QueueItemView { Snapshot = running });
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.ClearCompletedCanceledQueueCommand.CanExecute(null));
+        Assert.Equal(3, viewModel.QueueItems.Count);
+        #endregion
+
+        #region Act
+        await viewModel.ClearCompletedCanceledQueueCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Single(queue.PurgeCalls);
+        Assert.Contains(TransferJobStatus.Completed, queue.PurgeCalls[0]);
+        Assert.Contains(TransferJobStatus.Canceled, queue.PurgeCalls[0]);
+        Assert.Single(viewModel.QueueItems);
+        Assert.Equal(TransferJobStatus.Running, viewModel.QueueItems[0].Status);
+        Assert.False(viewModel.ClearCompletedCanceledQueueCommand.CanExecute(null));
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_LoadRemoteDirectory_NotFoundPath_FallsBackToRoot()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService
+        {
+            ListDirectoryPageBehavior = (path, _, _) =>
+            {
+                var normalized = path.NormalizeRelativePath();
+                return string.IsNullOrWhiteSpace(normalized)
+                    ? new RemoteDirectoryPage(
+                        [new RemoteEntry("root-folder", "root-folder", true, 0, DateTimeOffset.UtcNow)],
+                        null,
+                        false)
+                    : throw new RequestFailedException(404, "Not found", "ResourceNotFound", null);
+            }
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new PathAwareRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.RemotePath = "missing";
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("missing", viewModel.RemotePath);
+        #endregion
+
+        #region Act
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("root-folder", viewModel.RemoteEntries[0].Name);
+        Assert.Equal(string.Empty, viewModel.RemotePaneStatusMessage);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_LoadRemoteDirectory_NotFoundTargetAndRoot_RollsBackToLastSuccessfulPath()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService
+        {
+            ListDirectoryPageBehavior = (path, _, _) =>
+            {
+                var normalized = path.NormalizeRelativePath();
+                if (string.Equals(normalized, "known", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new RemoteDirectoryPage(
+                        [new RemoteEntry("known-file.txt", "known/known-file.txt", false, 10, DateTimeOffset.UtcNow)],
+                        null,
+                        false);
+                }
+
+                throw new RequestFailedException(404, "Not found", "ResourceNotFound", null);
+            }
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new PathStateRemoteCapabilityService("known"),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.RemotePath = "known";
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("known", viewModel.RemotePath);
+        #endregion
+
+        #region Act
+        viewModel.RemotePath = "missing";
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal("known", viewModel.RemotePath);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("known-file.txt", viewModel.RemoteEntries[0].Name);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_CreateLocalFolder_WhenNewFolderExists_UsesIncrementedName()
+    {
+        #region Arrange
+        var localOps = new StubLocalFileOperationsService();
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"storage-zilla-local-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(Path.Combine(tempRoot, "New Folder"));
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            localOps,
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        viewModel.LocalPath = tempRoot;
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.CreateLocalFolderCommand.CanExecute(null));
+        #endregion
+
+        #region Act
+        await viewModel.CreateLocalFolderCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(tempRoot, localOps.LastCreateParentPath);
+        Assert.Equal("New Folder (1)", localOps.LastCreateName);
+        #endregion
+
+        #region Cleanup
+        Directory.Delete(tempRoot, recursive: true);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_CreateRemoteFolder_WhenNewFolderExists_UsesIncrementedName()
+    {
+        #region Arrange
+        var remoteOps = new StubRemoteFileOperationsService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            remoteOps,
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        SetValidRemoteSelection(viewModel);
+        viewModel.RemotePath = "parent";
+        viewModel.RemoteEntries.Add(new RemoteEntry("New Folder", "parent/New Folder", true, 0, DateTimeOffset.UtcNow));
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.CreateRemoteFolderCommand.CanExecute(null));
+        #endregion
+
+        #region Act
+        await viewModel.CreateRemoteFolderCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.NotNull(remoteOps.LastCreatePath);
+        Assert.Equal("parent/New Folder (1)", remoteOps.LastCreatePath!.NormalizeRelativePath());
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_QueueLocalSelection_ConflictWithDefaultSkip_DoesNotEnqueue()
     {
         #region Arrange
@@ -188,6 +619,7 @@ public sealed class MainWindowAndViewModelUiTests
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -229,6 +661,7 @@ public sealed class MainWindowAndViewModelUiTests
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -299,6 +732,7 @@ public sealed class MainWindowAndViewModelUiTests
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -338,6 +772,7 @@ public sealed class MainWindowAndViewModelUiTests
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -420,6 +855,7 @@ public sealed class MainWindowAndViewModelUiTests
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new UnsortedDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -449,12 +885,89 @@ public sealed class MainWindowAndViewModelUiTests
         #endregion
     }
 
+    [Fact]
+    public async Task MainViewModel_SignIn_WithBrowserFallback_ShowsFallbackStatus()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(new LoginSession(true, "tester", "tenant", "SystemBrowser", UsedFallback: true)),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("Not signed in", viewModel.LoginStatus);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Contains("browser fallback", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignIn_WhenShareEndpointDnsFails_KeepsSignedInAndShowsFriendlyRemoteMessage()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(new LoginSession(true, "tester", "tenant")),
+            new DnsFailingDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("Not signed in", viewModel.LoginStatus);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Contains("Signed in", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unreachable", viewModel.LoginStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Cannot resolve", viewModel.RemotePaneStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("EndpointHost:", viewModel.RemoteDiagnosticsDetails, StringComparison.OrdinalIgnoreCase);
+        Assert.True(viewModel.CopyRemoteDiagnosticsCommand.CanExecute(null));
+        #endregion
+    }
+
     private static MainViewModel CreateViewModel(IRemoteCapabilityService remoteCapabilityService, out SpyTransferQueueService queue)
     {
         queue = new SpyTransferQueueService();
         return CreateViewModelWithDependencies(
             new StubAuthenticationService(),
             new StubDiscoveryService(),
+            null,
             new StubLocalBrowserService(),
             new StubAzureBrowserService(),
             new StubLocalFileOperationsService(),
@@ -475,6 +988,7 @@ public sealed class MainWindowAndViewModelUiTests
     private static MainViewModel CreateViewModelWithDependencies(
         IAuthenticationService authenticationService,
         IAzureDiscoveryService discoveryService,
+        IStorageEndpointPreflightService? storageEndpointPreflightService,
         ILocalBrowserService localBrowserService,
         IAzureFilesBrowserService azureBrowserService,
         ILocalFileOperationsService localFileOperationsService,
@@ -487,11 +1001,13 @@ public sealed class MainWindowAndViewModelUiTests
         IConnectionProfileStore profileStore,
         IRemoteCapabilityService remoteCapabilityService,
         IRemoteActionPolicyService remoteActionPolicyService,
-        IRemoteErrorInterpreter? remoteErrorInterpreter = null,
-        IAppUpdateService? appUpdateService = null) =>
+        IAppUpdateService? appUpdateService = null,
+        TimeSpan? remoteOpenDirectoryTimeout = null) =>
         new(
             authenticationService,
             discoveryService,
+            storageEndpointPreflightService ?? new StubStorageEndpointPreflightService(),
+            new StubRemoteReadTaskScheduler(),
             localBrowserService,
             azureBrowserService,
             localFileOperationsService,
@@ -504,8 +1020,9 @@ public sealed class MainWindowAndViewModelUiTests
             profileStore,
             remoteCapabilityService,
             remoteActionPolicyService,
-            remoteErrorInterpreter ?? new StubRemoteErrorInterpreter(),
-            appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.")));
+            appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.", null)),
+            new StubUserHelpContentService(),
+            remoteOpenDirectoryTimeout);
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
     {
@@ -522,6 +1039,8 @@ public sealed class MainWindowAndViewModelUiTests
         public List<Guid> RetriedJobIds { get; } = [];
         public List<Guid> CanceledJobIds { get; } = [];
         public List<TransferRequest> EnqueuedRequests { get; } = [];
+        public List<TransferJobSnapshot> SnapshotItems { get; } = [];
+        public List<IReadOnlyCollection<TransferJobStatus>> PurgeCalls { get; } = [];
         public int PauseAllCount { get; private set; }
 
         public Guid Enqueue(TransferRequest request, bool startImmediately = true)
@@ -569,13 +1088,27 @@ public sealed class MainWindowAndViewModelUiTests
             return Task.CompletedTask;
         }
 
-        public IReadOnlyList<TransferJobSnapshot> Snapshot() => [];
+        public Task<int> PurgeAsync(IReadOnlyCollection<TransferJobStatus> statuses, CancellationToken cancellationToken)
+        {
+            PurgeCalls.Add(statuses);
+            var removed = SnapshotItems.RemoveAll(x => statuses.Contains(x.Status));
+            return Task.FromResult(removed);
+        }
+
+        public IReadOnlyList<TransferJobSnapshot> Snapshot() => SnapshotItems.ToList();
     }
 
     private sealed class StubAuthenticationService : IAuthenticationService
     {
+        private readonly LoginSession _session;
+
+        public StubAuthenticationService(LoginSession? session = null)
+        {
+            _session = session ?? new LoginSession(true, "tester", "tenant");
+        }
+
         public TokenCredential GetCredential() => throw new NotSupportedException();
-        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken) => Task.FromResult(new LoginSession(true, "tester", "tenant"));
+        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken) => Task.FromResult(_session);
         public Task SignOutAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
@@ -598,6 +1131,12 @@ public sealed class MainWindowAndViewModelUiTests
             await Task.CompletedTask;
             yield return new FileShareItem("share");
         }
+    }
+
+    private sealed class StubStorageEndpointPreflightService : IStorageEndpointPreflightService
+    {
+        public Task<(bool Success, string? FailureSummary)> ValidateAsync(string endpointHost, CancellationToken cancellationToken) =>
+            Task.FromResult<(bool Success, string? FailureSummary)>((true, null));
     }
 
     private sealed class UnsortedDiscoveryService : IAzureDiscoveryService
@@ -627,6 +1166,32 @@ public sealed class MainWindowAndViewModelUiTests
         }
     }
 
+    private sealed class DnsFailingDiscoveryService : IAzureDiscoveryService
+    {
+        public async IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new SubscriptionItem("sub", "Subscription");
+        }
+
+        public async IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new StorageAccountItem(subscriptionId, "nexportstudiostorage", "rg");
+        }
+
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            var socket = new SocketException((int)SocketError.HostNotFound);
+            var http = new HttpRequestException("No such host is known.", socket);
+            throw new AggregateException(http);
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+    }
+
     private sealed class StubLocalBrowserService : ILocalBrowserService
     {
         public Task<IReadOnlyList<LocalEntry>> ListDirectoryAsync(string path, CancellationToken cancellationToken) =>
@@ -638,24 +1203,63 @@ public sealed class MainWindowAndViewModelUiTests
 
     private sealed class StubAzureBrowserService : IAzureFilesBrowserService
     {
+        public Func<SharePath, IReadOnlyList<RemoteEntry>> ListDirectoryBehavior { get; set; } = _ => [];
+        public Func<SharePath, string?, int, RemoteDirectoryPage> ListDirectoryPageBehavior { get; set; } =
+            (_, _, _) => new RemoteDirectoryPage([], null, false);
+        public Func<SharePath, string?, int, CancellationToken, Task<RemoteDirectoryPage>>? ListDirectoryPageAsyncBehavior { get; set; }
+
         public Task<IReadOnlyList<RemoteEntry>> ListDirectoryAsync(SharePath path, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<RemoteEntry>>([]);
+            Task.FromResult(ListDirectoryBehavior(path));
+
+        public Task<RemoteDirectoryPage> ListDirectoryPageAsync(SharePath path, string? continuationToken, int pageSize, CancellationToken cancellationToken) =>
+            ListDirectoryPageAsyncBehavior is not null
+                ? ListDirectoryPageAsyncBehavior(path, continuationToken, pageSize, cancellationToken)
+                : Task.FromResult(ListDirectoryPageBehavior(path, continuationToken, pageSize));
 
         public Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken) =>
             Task.FromResult<RemoteEntry?>(null);
     }
 
+    private sealed class StubRemoteReadTaskScheduler : IRemoteReadTaskScheduler
+    {
+        public Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
+            operation(cancellationToken);
+
+        public Task<TResult> RunLatestAsync<TResult>(Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken) =>
+            operation(cancellationToken);
+
+        public void CancelCurrent()
+        {
+        }
+    }
+
     private sealed class StubLocalFileOperationsService : ILocalFileOperationsService
     {
+        public string? LastCreateParentPath { get; private set; }
+        public string? LastCreateName { get; private set; }
+
         public Task ShowInExplorerAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task OpenAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task OpenWithAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task CreateDirectoryAsync(string parentPath, string name, CancellationToken cancellationToken)
+        {
+            LastCreateParentPath = parentPath;
+            LastCreateName = name;
+            return Task.CompletedTask;
+        }
         public Task RenameAsync(string path, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class StubRemoteFileOperationsService : IRemoteFileOperationsService
     {
+        public SharePath? LastCreatePath { get; private set; }
+
+        public Task CreateDirectoryAsync(SharePath path, CancellationToken cancellationToken)
+        {
+            LastCreatePath = path;
+            return Task.CompletedTask;
+        }
         public Task RenameAsync(SharePath path, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DeleteAsync(SharePath path, bool recursive, CancellationToken cancellationToken) => Task.CompletedTask;
     }
@@ -770,6 +1374,76 @@ public sealed class MainWindowAndViewModelUiTests
         public RemoteCapabilitySnapshot? GetLastKnown(RemoteContext context) => _snapshot;
     }
 
+    private sealed class PathAwareRemoteCapabilityService : IRemoteCapabilityService
+    {
+        public Task<RemoteCapabilitySnapshot> EvaluateAsync(RemoteContext context, CancellationToken cancellationToken) =>
+            Task.FromResult(BuildSnapshot(context));
+
+        public Task<RemoteCapabilitySnapshot> RefreshAsync(RemoteContext context, CancellationToken cancellationToken) =>
+            Task.FromResult(BuildSnapshot(context));
+
+        public RemoteCapabilitySnapshot? GetLastKnown(RemoteContext context) => BuildSnapshot(context);
+
+        private static RemoteCapabilitySnapshot BuildSnapshot(RemoteContext context)
+        {
+            if (string.Equals(context.Path, "missing", StringComparison.OrdinalIgnoreCase))
+            {
+                return new RemoteCapabilitySnapshot(
+                    RemoteAccessState.NotFound,
+                    CanBrowse: false,
+                    CanUpload: false,
+                    CanDownload: false,
+                    CanPlanMirror: false,
+                    CanExecuteMirror: false,
+                    UserMessage: "The selected remote path or share was not found.",
+                    EvaluatedUtc: DateTimeOffset.UtcNow,
+                    ErrorCode: "ResourceNotFound",
+                    HttpStatus: 404);
+            }
+
+            return RemoteCapabilitySnapshot.Accessible();
+        }
+    }
+
+    private sealed class PathStateRemoteCapabilityService : IRemoteCapabilityService
+    {
+        private readonly string _accessiblePath;
+
+        public PathStateRemoteCapabilityService(string accessiblePath)
+        {
+            _accessiblePath = accessiblePath;
+        }
+
+        public Task<RemoteCapabilitySnapshot> EvaluateAsync(RemoteContext context, CancellationToken cancellationToken) =>
+            Task.FromResult(BuildSnapshot(context));
+
+        public Task<RemoteCapabilitySnapshot> RefreshAsync(RemoteContext context, CancellationToken cancellationToken) =>
+            Task.FromResult(BuildSnapshot(context));
+
+        public RemoteCapabilitySnapshot? GetLastKnown(RemoteContext context) => BuildSnapshot(context);
+
+        private RemoteCapabilitySnapshot BuildSnapshot(RemoteContext context)
+        {
+            var normalized = context.Path.Replace('\\', '/').Trim('/');
+            if (string.Equals(normalized, _accessiblePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return RemoteCapabilitySnapshot.Accessible();
+            }
+
+            return new RemoteCapabilitySnapshot(
+                RemoteAccessState.NotFound,
+                CanBrowse: false,
+                CanUpload: false,
+                CanDownload: false,
+                CanPlanMirror: false,
+                CanExecuteMirror: false,
+                UserMessage: "The selected remote path or share was not found.",
+                EvaluatedUtc: DateTimeOffset.UtcNow,
+                ErrorCode: "ResourceNotFound",
+                HttpStatus: 404);
+        }
+    }
+
     private sealed class StubRemoteActionPolicyService : IRemoteActionPolicyService
     {
         public RemoteActionPolicy Compute(RemoteCapabilitySnapshot? capability, RemoteActionInputs inputs) =>
@@ -778,20 +1452,6 @@ public sealed class MainWindowAndViewModelUiTests
                 CanEnqueueDownload: capability?.State == RemoteAccessState.Accessible && inputs.HasSelectedRemoteFile,
                 CanPlanMirror: capability?.State == RemoteAccessState.Accessible && !inputs.IsMirrorPlanning,
                 CanExecuteMirror: capability?.State == RemoteAccessState.Accessible && inputs.HasMirrorPlan);
-    }
-
-    private sealed class StubRemoteErrorInterpreter : IRemoteErrorInterpreter
-    {
-        public RemoteCapabilitySnapshot Interpret(Exception exception, RemoteContext context) =>
-            new(
-                RemoteAccessState.Unknown,
-                CanBrowse: false,
-                CanUpload: false,
-                CanDownload: false,
-                CanPlanMirror: false,
-                CanExecuteMirror: false,
-                UserMessage: exception.Message,
-                EvaluatedUtc: DateTimeOffset.UtcNow);
     }
 
     private sealed class StubAppUpdateService : IAppUpdateService
@@ -825,4 +1485,16 @@ public sealed class MainWindowAndViewModelUiTests
 
         public Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken) => Task.CompletedTask;
     }
+
+    private sealed class StubUserHelpContentService : IUserHelpContentService
+    {
+        public IReadOnlyList<HelpTopic> GetTopics() =>
+        [
+            new HelpTopic("overview", "Overview", "README.md")
+        ];
+
+        public Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken) =>
+            Task.FromResult(new HelpDocument(topicId, "Overview", "# Help", "<html><body><h1>Help</h1></body></html>", "README.md"));
+    }
 }
+

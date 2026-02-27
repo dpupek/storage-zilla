@@ -123,6 +123,12 @@ public sealed class MirrorPlannerServiceTests
             return Task.FromResult(entries ?? (IReadOnlyList<RemoteEntry>)[]);
         }
 
+        public Task<RemoteDirectoryPage> ListDirectoryPageAsync(SharePath path, string? continuationToken, int pageSize, CancellationToken cancellationToken)
+        {
+            _map.TryGetValue(path.NormalizeRelativePath(), out var entries);
+            return Task.FromResult(new RemoteDirectoryPage(entries ?? [], null, false));
+        }
+
         public Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken) =>
             Task.FromResult<RemoteEntry?>(null);
     }

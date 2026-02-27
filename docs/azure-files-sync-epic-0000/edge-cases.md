@@ -3,11 +3,14 @@
 ## Auth
 - User closes login browser window.
 - Token expires during transfer.
+- Broker-based auth prerequisites are missing on a workstation.
+- Localhost callback page can show connection-refused after successful browser sign-in redirect.
 
 ## Discovery
 - No subscriptions available.
 - User has ARM rights but no data-plane file share rights.
 - Remote entry selection can race with async metadata enrichment.
+- Saved storage account/file share endpoint is no longer resolvable (DNS/network drift).
 
 ## Transfers
 - Local file deleted while queued.
@@ -26,6 +29,8 @@
 - Explicit error messages and retry controls.
 - Checkpoint persistence for resume.
 - Mandatory delete confirmation for mirror deletes.
+- Interactive auth now prefers WAM and falls back to system browser automatically when broker requirements are not met.
+- Profile restore/share discovery errors from unavailable hosts are surfaced as non-blocking guidance so sign-in remains usable.
 - Preserve right-pane selection identity while async metadata updates complete.
 - Transfer queue dedupe blocks duplicate active transfers (`Queued`/`Running`/`Paused`) for the same direction + source + destination.
 - Queue filtering controls (status + direction + show all) improve recovery triage without mutating queue state.

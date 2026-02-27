@@ -2,7 +2,9 @@ using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Services;
 using AzureFilesSync.Infrastructure.Auth;
 using AzureFilesSync.Infrastructure.Azure;
+using AzureFilesSync.Infrastructure.Concurrency;
 using AzureFilesSync.Infrastructure.Config;
+using AzureFilesSync.Infrastructure.Docs;
 using AzureFilesSync.Infrastructure.Local;
 using AzureFilesSync.Infrastructure.Transfers;
 using AzureFilesSync.Infrastructure.Updates;
@@ -30,6 +32,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IAuthenticationService, InteractiveAuthenticationService>();
         services.AddSingleton<IAzureDiscoveryService, AzureDiscoveryService>();
+        services.AddSingleton<IStorageEndpointPreflightService, StorageEndpointPreflightService>();
+        services.AddSingleton<IRemoteReadTaskScheduler, RemoteReadTaskScheduler>();
         services.AddSingleton<IAzureFilesBrowserService, AzureFilesBrowserService>();
         services.AddSingleton<IRemoteFileOperationsService, RemoteFileOperationsService>();
         services.AddSingleton<IRemoteErrorInterpreter, RemoteErrorInterpreter>();
@@ -46,6 +50,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMirrorExecutionService, MirrorExecutionService>();
         services.AddSingleton<IGitHubReleaseClient, GitHubReleaseClient>();
         services.AddSingleton<IAppUpdateService, AppUpdateService>();
+        services.AddSingleton<IUserHelpContentService, FileSystemUserHelpContentService>();
 
         return services;
     }

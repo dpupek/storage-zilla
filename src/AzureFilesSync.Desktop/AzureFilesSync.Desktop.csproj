@@ -29,4 +29,15 @@
     <Resource Include="Assets\Branding\**\*.*" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\docs\user\**\*.md">
+      <Link>docs\user\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\img\**\*.png">
+      <Link>img\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

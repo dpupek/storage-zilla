@@ -233,6 +233,35 @@ public sealed class TransferQueueService : ITransferQueueService
         await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<int> PurgeAsync(IReadOnlyCollection<TransferJobStatus> statuses, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (statuses.Count == 0)
+        {
+            return 0;
+        }
+
+        var statusSet = statuses.ToHashSet();
+        var removed = 0;
+        foreach (var pair in _jobs.ToArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = pair.Value.Snapshot;
+            if (!statusSet.Contains(snapshot.Status))
+            {
+                continue;
+            }
+
+            if (_jobs.TryRemove(pair.Key, out _))
+            {
+                removed++;
+                await _checkpointStore.DeleteAsync(pair.Key, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return removed;
+    }
+
     public IReadOnlyList<TransferJobSnapshot> Snapshot() => _jobs.Values.Select(x => x.Snapshot).OrderBy(x => x.Status).ToList();
 
     private async Task WorkerLoopAsync(CancellationToken cancellationToken)
@@ -261,8 +290,7 @@ public sealed class TransferQueueService : ITransferQueueService
                 next.JobCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 next.PauseRequested = false;
                 transferCancellation = next.JobCancellation.Token;
-                var totalBytes = await _executor.EstimateSizeAsync(next.Snapshot.Request, transferCancellation).ConfigureAwait(false);
-                next.Snapshot = next.Snapshot with { Status = TransferJobStatus.Running, TotalBytes = totalBytes, Message = null };
+                next.Snapshot = next.Snapshot with { Status = TransferJobStatus.Running, Message = null };
                 Publish(next.Snapshot);
                 runningSnapshot = next.Snapshot;
             }
@@ -310,6 +338,11 @@ public sealed class TransferQueueService : ITransferQueueService
 
             try
             {
+                var totalBytes = await _executor.EstimateSizeAsync(runningSnapshot.Request, transferCancellation).ConfigureAwait(false);
+                runningSnapshot = runningSnapshot with { TotalBytes = totalBytes };
+                next.Snapshot = runningSnapshot;
+                Publish(runningSnapshot);
+
                 var checkpoint = await _checkpointStore.LoadAsync(runningSnapshot.JobId, transferCancellation).ConfigureAwait(false);
                 await _executor.ExecuteAsync(runningSnapshot.JobId, runningSnapshot.Request, checkpoint, progress =>
                 {

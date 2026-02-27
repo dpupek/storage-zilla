@@ -54,7 +54,9 @@ public sealed class RemoteCapabilityService : IRemoteCapabilityService
             try
             {
                 var sharePath = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
-                await _azureFilesBrowserService.ListDirectoryAsync(sharePath, cancellationToken).ConfigureAwait(false);
+                await _azureFilesBrowserService
+                    .ListDirectoryPageAsync(sharePath, continuationToken: null, pageSize: 1, cancellationToken)
+                    .ConfigureAwait(false);
                 snapshot = RemoteCapabilitySnapshot.Accessible();
             }
             catch (Exception ex)

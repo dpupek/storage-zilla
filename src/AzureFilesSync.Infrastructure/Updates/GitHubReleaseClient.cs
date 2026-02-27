@@ -66,6 +66,7 @@ public sealed class GitHubReleaseClient : IGitHubReleaseClient
     {
         release = default!;
         var tag = root.TryGetProperty("tag_name", out var tagElement) ? tagElement.GetString() : null;
+        var htmlUrl = root.TryGetProperty("html_url", out var htmlUrlElement) ? htmlUrlElement.GetString() : null;
         if (string.IsNullOrWhiteSpace(tag))
         {
             return false;
@@ -95,7 +96,7 @@ public sealed class GitHubReleaseClient : IGitHubReleaseClient
             }
         }
 
-        release = new GitHubRelease(tag, isPrerelease, isDraft, publishedAt, assets);
+        release = new GitHubRelease(tag, htmlUrl ?? string.Empty, isPrerelease, isDraft, publishedAt, assets);
         return true;
     }
 }

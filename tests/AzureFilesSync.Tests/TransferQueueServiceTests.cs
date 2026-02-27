@@ -1,6 +1,7 @@
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
 using AzureFilesSync.Core.Services;
+using System.Diagnostics;
 
 namespace AzureFilesSync.Tests;
 
@@ -285,25 +286,16 @@ public sealed class TransferQueueServiceTests
     }
 
     [Fact]
-    public async Task EstimateFailure_FailsJob_AndWorkerContinuesWithNextJob()
+    public async Task EstimateSizeFailure_FirstJobFails_SecondJobStillCompletes()
     {
         #region Arrange
-        var executor = new EstimateFailureExecutor();
+        var executor = new FailingFirstEstimateTransferExecutor();
         var checkpoints = new InMemoryCheckpointStore();
         var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
-        var failedRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\fail.txt", new SharePath("acct", "share", "fail.txt"));
-        var successfulRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\ok.txt", new SharePath("acct", "share", "ok.txt"));
-        var failedId = queue.Enqueue(failedRequest);
-        var successId = queue.Enqueue(successfulRequest);
-        using var completed = new ManualResetEventSlim(false);
-
-        queue.JobUpdated += (_, snapshot) =>
-        {
-            if (snapshot.JobId == successId && snapshot.Status == TransferJobStatus.Completed)
-            {
-                completed.Set();
-            }
-        };
+        var firstRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\first.txt", new SharePath("acct", "share", "first.txt"));
+        var secondRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\second.txt", new SharePath("acct", "share", "second.txt"));
+        var firstJobId = queue.Enqueue(firstRequest);
+        var secondJobId = queue.Enqueue(secondRequest);
         #endregion
 
         #region Initial Assert
@@ -311,15 +303,72 @@ public sealed class TransferQueueServiceTests
         #endregion
 
         #region Act
-        var signaled = completed.Wait(TimeSpan.FromSeconds(5));
+        var settled = await WaitUntilAsync(
+            condition: () =>
+            {
+                var snapshots = queue.Snapshot();
+                var first = snapshots.SingleOrDefault(x => x.JobId == firstJobId);
+                var second = snapshots.SingleOrDefault(x => x.JobId == secondJobId);
+                return first?.Status == TransferJobStatus.Failed &&
+                       second?.Status == TransferJobStatus.Completed;
+            },
+            timeout: TimeSpan.FromSeconds(20));
         #endregion
 
         #region Assert
-        Assert.True(signaled);
-        var failed = queue.Snapshot().Single(x => x.JobId == failedId);
-        var succeeded = queue.Snapshot().Single(x => x.JobId == successId);
-        Assert.Equal(TransferJobStatus.Failed, failed.Status);
-        Assert.Equal(TransferJobStatus.Completed, succeeded.Status);
+        Assert.True(settled);
+        var first = queue.Snapshot().Single(x => x.JobId == firstJobId);
+        var second = queue.Snapshot().Single(x => x.JobId == secondJobId);
+        Assert.Equal(TransferJobStatus.Failed, first.Status);
+        Assert.Equal(TransferJobStatus.Completed, second.Status);
+        #endregion
+    }
+
+    [Fact]
+    public async Task Purge_RemovesCompletedAndCanceled_AndKeepsActiveJobs()
+    {
+        #region Arrange
+        var executor = new StubTransferExecutor();
+        var checkpoints = new InMemoryCheckpointStore();
+        var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
+        var completedSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completedRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\done.txt", new SharePath("acct", "share", "done.txt"));
+        var canceledRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\cancel.txt", new SharePath("acct", "share", "cancel.txt"));
+        var pausedRequest = new TransferRequest(TransferDirection.Upload, @"C:\tmp\paused.txt", new SharePath("acct", "share", "paused.txt"));
+        var completedId = queue.Enqueue(completedRequest);
+        Guid canceledId = Guid.Empty;
+        Guid pausedId = Guid.Empty;
+
+        queue.JobUpdated += (_, snapshot) =>
+        {
+            if (snapshot.JobId == completedId && snapshot.Status == TransferJobStatus.Completed)
+            {
+                completedSignal.TrySetResult(true);
+            }
+        };
+        #endregion
+
+        #region Initial Assert
+        await completedSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        canceledId = queue.Enqueue(canceledRequest, startImmediately: false);
+        pausedId = queue.Enqueue(pausedRequest, startImmediately: false);
+        await queue.CancelAsync(canceledId, CancellationToken.None);
+        var before = queue.Snapshot();
+        Assert.Contains(before, x => x.JobId == completedId && x.Status == TransferJobStatus.Completed);
+        Assert.Contains(before, x => x.JobId == canceledId && x.Status == TransferJobStatus.Canceled);
+        Assert.Contains(before, x => x.JobId == pausedId && x.Status == TransferJobStatus.Paused);
+        #endregion
+
+        #region Act
+        var removed = await queue.PurgeAsync([TransferJobStatus.Completed, TransferJobStatus.Canceled], CancellationToken.None);
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, removed);
+        var after = queue.Snapshot();
+        Assert.DoesNotContain(after, x => x.JobId == completedId);
+        Assert.DoesNotContain(after, x => x.JobId == canceledId);
+        Assert.Contains(after, x => x.JobId == pausedId && x.Status == TransferJobStatus.Paused);
         #endregion
     }
 
@@ -406,22 +455,45 @@ public sealed class TransferQueueServiceTests
         }
     }
 
-    private sealed class EstimateFailureExecutor : ITransferExecutor
+    private sealed class FailingFirstEstimateTransferExecutor : ITransferExecutor
     {
+        private int _estimateCallCount;
+
         public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken)
         {
-            if (request.LocalPath.Contains("fail", StringComparison.OrdinalIgnoreCase))
+            if (Interlocked.Increment(ref _estimateCallCount) == 1)
             {
-                throw new InvalidOperationException("Estimate failed.");
+                throw new InvalidOperationException("Estimate failure for test.");
             }
 
             return Task.FromResult(100L);
         }
 
-        public Task ExecuteAsync(Guid jobId, TransferRequest request, TransferCheckpoint? checkpoint, Action<TransferProgress> progress, CancellationToken cancellationToken)
+        public Task ExecuteAsync(
+            Guid jobId,
+            TransferRequest request,
+            TransferCheckpoint? checkpoint,
+            Action<TransferProgress> progress,
+            CancellationToken cancellationToken)
         {
             progress(new TransferProgress(100, 100));
             return Task.CompletedTask;
         }
+    }
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(50);
+        }
+
+        return condition();
     }
 }

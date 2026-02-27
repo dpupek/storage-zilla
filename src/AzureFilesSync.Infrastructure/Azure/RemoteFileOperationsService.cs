@@ -14,6 +14,19 @@ public sealed class RemoteFileOperationsService : IRemoteFileOperationsService
         _authenticationService = authenticationService;
     }
 
+    public async Task CreateDirectoryAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        var serviceClient = BuildServiceClient(path.StorageAccountName);
+        var shareClient = serviceClient.GetShareClient(path.ShareName);
+        var normalized = path.NormalizeRelativePath();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        await shareClient.GetDirectoryClient(normalized).CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+    }
+
     public async Task RenameAsync(SharePath path, string newName, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(newName))

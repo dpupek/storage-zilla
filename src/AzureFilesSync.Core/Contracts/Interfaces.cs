@@ -17,6 +17,11 @@ public interface IAzureDiscoveryService
     IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, CancellationToken cancellationToken);
 }
 
+public interface IStorageEndpointPreflightService
+{
+    Task<(bool Success, string? FailureSummary)> ValidateAsync(string endpointHost, CancellationToken cancellationToken);
+}
+
 public interface ILocalBrowserService
 {
     Task<IReadOnlyList<LocalEntry>> ListDirectoryAsync(string path, CancellationToken cancellationToken);
@@ -26,7 +31,19 @@ public interface ILocalBrowserService
 public interface IAzureFilesBrowserService
 {
     Task<IReadOnlyList<RemoteEntry>> ListDirectoryAsync(SharePath path, CancellationToken cancellationToken);
+    Task<RemoteDirectoryPage> ListDirectoryPageAsync(
+        SharePath path,
+        string? continuationToken,
+        int pageSize,
+        CancellationToken cancellationToken);
     Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken);
+}
+
+public interface IRemoteReadTaskScheduler
+{
+    Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken);
+    Task<TResult> RunLatestAsync<TResult>(Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken);
+    void CancelCurrent();
 }
 
 public interface ILocalFileOperationsService
@@ -34,12 +51,14 @@ public interface ILocalFileOperationsService
     Task ShowInExplorerAsync(string path, CancellationToken cancellationToken);
     Task OpenAsync(string path, CancellationToken cancellationToken);
     Task OpenWithAsync(string path, CancellationToken cancellationToken);
+    Task CreateDirectoryAsync(string parentPath, string name, CancellationToken cancellationToken);
     Task RenameAsync(string path, string newName, CancellationToken cancellationToken);
     Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken);
 }
 
 public interface IRemoteFileOperationsService
 {
+    Task CreateDirectoryAsync(SharePath path, CancellationToken cancellationToken);
     Task RenameAsync(SharePath path, string newName, CancellationToken cancellationToken);
     Task DeleteAsync(SharePath path, bool recursive, CancellationToken cancellationToken);
 }
@@ -79,6 +98,7 @@ public interface ITransferQueueService
     Task PauseAllAsync(CancellationToken cancellationToken);
     Task RetryAsync(Guid jobId, CancellationToken cancellationToken);
     Task CancelAsync(Guid jobId, CancellationToken cancellationToken);
+    Task<int> PurgeAsync(IReadOnlyCollection<TransferJobStatus> statuses, CancellationToken cancellationToken);
     IReadOnlyList<TransferJobSnapshot> Snapshot();
 }
 
@@ -128,4 +148,10 @@ public interface IAppUpdateService
     Task<UpdateDownloadResult> DownloadUpdateAsync(UpdateCandidate candidate, IProgress<double>? progress, CancellationToken cancellationToken);
     Task<UpdateValidationResult> ValidateDownloadedUpdateAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
     Task LaunchInstallerAsync(UpdateDownloadResult downloaded, CancellationToken cancellationToken);
+}
+
+public interface IUserHelpContentService
+{
+    IReadOnlyList<HelpTopic> GetTopics();
+    Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken);
 }

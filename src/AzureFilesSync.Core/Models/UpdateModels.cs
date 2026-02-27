@@ -26,6 +26,7 @@ public sealed record GitHubReleaseAsset(
 
 public sealed record GitHubRelease(
     string TagName,
+    string HtmlUrl,
     bool IsPrerelease,
     bool IsDraft,
     DateTimeOffset PublishedAtUtc,
@@ -44,7 +45,8 @@ public sealed record UpdateCheckResult(
     string? LatestVersion,
     bool IsUpdateAvailable,
     UpdateCandidate? Candidate,
-    string Message);
+    string Message,
+    string? ReleasePageUrl);
 
 public sealed record UpdateDownloadResult(
     UpdateCandidate Candidate,
