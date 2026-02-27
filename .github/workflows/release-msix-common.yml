@@ -58,6 +58,26 @@ jobs:
             throw "Could not resolve base version from NBGV."
           }
 
+          $baseParts = $baseVersion.Split('.')
+          if ($baseParts.Count -ne 3) {
+            throw "Expected base version in 'major.minor.patch' format. Got '$baseVersion'."
+          }
+
+          $msixMajor = 0
+          $msixMinor = 0
+          $msixPatch = 0
+          if (-not [int]::TryParse($baseParts[0], [ref]$msixMajor) -or
+              -not [int]::TryParse($baseParts[1], [ref]$msixMinor) -or
+              -not [int]::TryParse($baseParts[2], [ref]$msixPatch)) {
+            throw "Base version contains non-numeric components: '$baseVersion'."
+          }
+
+          foreach ($value in @($msixMajor, $msixMinor, $msixPatch)) {
+            if ($value -lt 0 -or $value -gt 65535) {
+              throw "MSIX version components must be between 0 and 65535. Got '$baseVersion'."
+            }
+          }
+
           if ($channel -eq "beta") {
             $height = if ($info.VersionHeight -is [int]) { [int]$info.VersionHeight } else { [int]$env:GITHUB_RUN_NUMBER }
             if ($height -le 0) {
@@ -66,18 +86,27 @@ jobs:
             $prerelease = "beta.$height"
             $version = "$baseVersion-$prerelease"
             $releaseName = "Storage Zilla Beta v$version"
+            $msixRevision = 10000
           } elseif ($channel -eq "prod") {
             $prerelease = ""
             $version = $baseVersion
             $releaseName = "Storage Zilla v$version"
+            $msixRevision = 20000
           } else {
             throw "Unsupported channel '$channel'. Expected 'beta' or 'prod'."
           }
+
+          if ($msixRevision -lt 0 -or $msixRevision -gt 65535) {
+            throw "MSIX revision component must be between 0 and 65535. Got '$msixRevision'."
+          }
+
+          $msixVersion = "$msixMajor.$msixMinor.$msixPatch.$msixRevision"
 
           $tag = "v$version"
           "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
           "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
+          "msix_version=$msixVersion" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "release_name=$releaseName" >> $env:GITHUB_OUTPUT
           "VERSION=$version" >> $env:GITHUB_ENV
@@ -200,6 +229,19 @@ jobs:
         env:
           MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
         run: |
+          $manifestPath = "installer/StorageZilla.Package/Package.appxmanifest"
+          [xml]$manifest = Get-Content $manifestPath
+          $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+          $ns.AddNamespace("appx", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
+          $identity = $manifest.SelectSingleNode("/appx:Package/appx:Identity", $ns)
+          if ($null -eq $identity) {
+            throw "Unable to find Package/Identity node in $manifestPath."
+          }
+          Write-Host "MSIX identity name: $($identity.GetAttribute('Name'))"
+          Write-Host "MSIX publisher: $($identity.GetAttribute('Publisher'))"
+          Write-Host "MSIX package version (computed): ${{ steps.version.outputs.msix_version }}"
+          Write-Host "Release tag: ${{ steps.version.outputs.tag }}"
+
           $packageDir = Join-Path $env:RUNNER_TEMP "msix"
           New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
@@ -214,7 +256,7 @@ jobs:
             "/p:PackageCertificateThumbprint=$env:MSIX_CERT_THUMBPRINT"
             "/p:PackageCertificateStoreName=My"
             "/p:PackageCertificateStoreLocation=CurrentUser"
-            "/p:AppxPackageVersion=${{ steps.version.outputs.base_version }}.0"
+            "/p:AppxPackageVersion=${{ steps.version.outputs.msix_version }}"
             "/p:RuntimeIdentifier=win-x64"
             "/p:SelfContained=true"
             "/p:VersionPrefix=${{ steps.version.outputs.base_version }}"

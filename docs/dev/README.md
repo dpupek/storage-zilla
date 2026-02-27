@@ -46,7 +46,10 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
   - Managed by Nerdbank.GitVersioning (`version.json`)
   - Pipeline computes versions automatically from Git history
   - About dialog remains aligned with assembly informational version
-  - MSIX package version uses four-part format (`x.y.z.0`)
+  - MSIX package version uses four-part format (`x.y.z.r`) with channel revision:
+    - `beta` -> `x.y.z.10000`
+    - `prod` -> `x.y.z.20000`
+  - This ensures beta-to-prod installs upgrade in place without requiring uninstall for same base version.
   - Also publishes an unsigned `x64` MSI artifact for internal/manual install scenarios.
 
 ### Trigger a Beta Release
