@@ -81,6 +81,7 @@
 - [x] Add a `Copy diagnostics` action for share discovery failures (endpoint + exception summary).
 - [x] Add preflight endpoint connectivity validation for selected storage accounts to fail fast before long share-enumeration retries.
 - [x] Apply delete actions to full local/remote multi-selection with count-based confirmation and status summaries.
+- [x] Add remote recursive search with scope selection (current path/share root), cancellable execution, search-mode result view, and clear-to-browse restore flow.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.

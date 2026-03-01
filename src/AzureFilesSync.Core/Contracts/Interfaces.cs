@@ -39,6 +39,11 @@ public interface IAzureFilesBrowserService
     Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken);
 }
 
+public interface IRemoteSearchService
+{
+    Task<RemoteSearchResult> SearchAsync(RemoteSearchRequest request, CancellationToken cancellationToken);
+}
+
 public interface IRemoteReadTaskScheduler
 {
     Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken);

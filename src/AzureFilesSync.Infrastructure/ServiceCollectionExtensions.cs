@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IStorageEndpointPreflightService, StorageEndpointPreflightService>();
         services.AddSingleton<IRemoteReadTaskScheduler, RemoteReadTaskScheduler>();
         services.AddSingleton<IAzureFilesBrowserService, AzureFilesBrowserService>();
+        services.AddSingleton<IRemoteSearchService, RemoteSearchService>();
         services.AddSingleton<IRemoteFileOperationsService, RemoteFileOperationsService>();
         services.AddSingleton<IRemoteErrorInterpreter, RemoteErrorInterpreter>();
         services.AddSingleton<IRemoteCapabilityService, RemoteCapabilityService>();

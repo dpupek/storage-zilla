@@ -127,16 +127,59 @@
                 <Button Content="Browse" Width="90" Margin="8,0,0,0" Command="{Binding BrowseLocalFolderCommand}" />
             </StackPanel>
 
-            <StackPanel Grid.Column="2" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox x:Name="RemotePathCombo"
-                          Width="460"
-                          IsEditable="True"
-                          ItemsSource="{Binding RecentRemotePaths}"
-                          Text="{Binding RemotePathDisplay, UpdateSourceTrigger=PropertyChanged}"
-                          SelectionChanged="RemotePathCombo_SelectionChanged"
-                          KeyDown="RemotePathCombo_KeyDown" />
-                <Button Content="Refresh" Width="90" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
-            </StackPanel>
+            <Grid Grid.Column="2" Grid.Row="1" Margin="0,0,0,8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal">
+                    <ComboBox x:Name="RemotePathCombo"
+                              Width="280"
+                              IsEditable="True"
+                              ItemsSource="{Binding RecentRemotePaths}"
+                              Text="{Binding RemotePathDisplay, UpdateSourceTrigger=PropertyChanged}"
+                              SelectionChanged="RemotePathCombo_SelectionChanged"
+                              KeyDown="RemotePathCombo_KeyDown" />
+                    <Button Content="Refresh" Width="70" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
+                    <TextBox x:Name="RemoteSearchTextBox"
+                             Width="150"
+                             Margin="8,0,0,0"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding RemoteSearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                             KeyDown="RemoteSearchTextBox_KeyDown"
+                             ToolTip="Search remote files and folders recursively" />
+                    <ComboBox Width="100"
+                              Margin="8,0,0,0"
+                              ItemsSource="{Binding RemoteSearchScopeOptions}"
+                              SelectedItem="{Binding SelectedRemoteSearchScope}" />
+                    <Button Width="34"
+                            Margin="8,0,0,0"
+                            ToolTip="Search remote"
+                            Command="{Binding SearchRemoteCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12"
+                                   Text="&#xE721;"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="34"
+                            Margin="4,0,0,0"
+                            ToolTip="Clear remote search"
+                            Command="{Binding ClearRemoteSearchCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12"
+                                   Text="&#xE894;"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                </StackPanel>
+
+                <TextBlock Grid.Row="1"
+                           Margin="0,4,0,0"
+                           Foreground="#405A78"
+                           Text="{Binding RemoteSearchStatusMessage}" />
+            </Grid>
 
             <DataGrid x:Name="LocalGrid"
                       Grid.Column="0"

@@ -320,6 +320,17 @@ public partial class MainWindow : Window
         await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
     }
 
+    private async void RemoteSearchTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await vm.SearchRemoteCommand.ExecuteAsync(null);
+    }
+
     private void QueueGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (DataContext is not MainViewModel vm)
