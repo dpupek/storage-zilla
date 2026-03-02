@@ -138,7 +138,7 @@
                     <ComboBox x:Name="RemotePathCombo"
                               Width="280"
                               IsEditable="True"
-                              ItemsSource="{Binding RecentRemotePaths}"
+                              ItemsSource="{Binding RecentRemotePathDisplayOptions}"
                               Text="{Binding RemotePathDisplay, Mode=OneWay}"
                               SelectionChanged="RemotePathCombo_SelectionChanged"
                               DropDownClosed="RemotePathCombo_DropDownClosed"

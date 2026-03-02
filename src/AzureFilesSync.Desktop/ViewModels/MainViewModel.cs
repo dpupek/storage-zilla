@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using Serilog;
 using System.Collections;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -106,6 +107,27 @@ public partial class MainViewModel : ObservableObject
         RemoteSearchScopeCurrentPath,
         RemoteSearchScopeShareRoot
     ];
+    public IReadOnlyList<string> RecentRemotePathDisplayOptions
+    {
+        get
+        {
+            var results = new List<string> { FormatRemotePathDisplay(string.Empty) };
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { string.Empty };
+
+            foreach (var path in RecentRemotePaths)
+            {
+                var normalized = NormalizeRemotePathDisplay(path);
+                if (!seen.Add(normalized))
+                {
+                    continue;
+                }
+
+                results.Add(FormatRemotePathDisplay(normalized));
+            }
+
+            return results;
+        }
+    }
     public ICollectionView QueueItemsView { get; }
 
     [ObservableProperty]
@@ -211,7 +233,7 @@ public partial class MainViewModel : ObservableObject
 
     public string RemotePathDisplay
     {
-        get => string.IsNullOrWhiteSpace(RemotePath) ? @"\" : RemotePath;
+        get => FormatRemotePathDisplay(RemotePath);
         set
         {
             var normalized = NormalizeRemotePathDisplay(value);
@@ -332,6 +354,7 @@ public partial class MainViewModel : ObservableObject
         _userHelpContentService = userHelpContentService;
         _remoteOpenDirectoryTimeout = remoteOpenDirectoryTimeout ?? DefaultRemoteOpenDirectoryTimeout;
         UpdateChannel = _appUpdateService.CurrentChannel;
+        RecentRemotePaths.CollectionChanged += OnRecentRemotePathsCollectionChanged;
 
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
         QueueItemsView.Filter = ShouldIncludeQueueItem;
@@ -2708,6 +2731,19 @@ public partial class MainViewModel : ObservableObject
         }
 
         return trimmed.Replace('\\', '/').Trim('/');
+    }
+
+    private static string FormatRemotePathDisplay(string? path)
+    {
+        var normalized = NormalizeRemotePathDisplay(path);
+        return string.IsNullOrWhiteSpace(normalized)
+            ? "//"
+            : $"//{normalized}";
+    }
+
+    private void OnRecentRemotePathsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(RecentRemotePathDisplayOptions));
     }
 
     private bool CanBuildMirrorPlan() => BuildRemotePolicy().CanPlanMirror;
