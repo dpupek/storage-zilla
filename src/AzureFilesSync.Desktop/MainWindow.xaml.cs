@@ -3,6 +3,7 @@ using AzureFilesSync.Desktop.Branding;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
@@ -31,6 +32,8 @@ public partial class MainWindow : Window
         }
         _viewModel = viewModel;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _viewModel.RecentLocalPaths.CollectionChanged += RecentPaths_CollectionChanged;
+        _viewModel.RecentRemotePaths.CollectionChanged += RecentPaths_CollectionChanged;
         Closed += OnClosed;
         DataContext = _viewModel;
         Loaded += OnLoaded;
@@ -43,6 +46,7 @@ public partial class MainWindow : Window
             ApplyLayout(LocalGrid, GetLocalColumnMap(), vm.LocalGridLayout);
             ApplyLayout(RemoteGrid, GetRemoteColumnMap(), vm.RemoteGridLayout);
             UpdateRemoteSearchUiState(vm);
+            SyncPathComboTextFromViewModel();
         }
 
         await PersistLayoutsAsync();
@@ -51,6 +55,8 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        _viewModel.RecentLocalPaths.CollectionChanged -= RecentPaths_CollectionChanged;
+        _viewModel.RecentRemotePaths.CollectionChanged -= RecentPaths_CollectionChanged;
         Closed -= OnClosed;
     }
 
@@ -65,6 +71,16 @@ public partial class MainWindow : Window
         {
             Dispatcher.Invoke(() => UpdateRemoteSearchUiState(vm));
         }
+
+        if (e.PropertyName is nameof(MainViewModel.LocalPath) or nameof(MainViewModel.RemotePathDisplay))
+        {
+            Dispatcher.Invoke(SyncPathComboTextFromViewModel);
+        }
+    }
+
+    private void RecentPaths_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        Dispatcher.Invoke(SyncPathComboTextFromViewModel);
     }
 
     private void UpdateRemoteSearchUiState(MainViewModel vm)
