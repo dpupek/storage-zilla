@@ -99,44 +99,175 @@
 
             <Grid Grid.Column="0" Grid.Row="0" Margin="0,0,0,6">
                 <TextBlock Text="Local" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Width="36" Height="26" ToolTip="Up one folder" Command="{Binding NavigateLocalUpCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Content="New Folder" Margin="8,0,0,0" Padding="8,0" Command="{Binding CreateLocalFolderCommand}" />
-                </StackPanel>
             </Grid>
             <Grid Grid.Column="2" Grid.Row="0" Margin="0,0,0,6">
                 <TextBlock Text="Remote" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Width="36" Height="26" ToolTip="Up one folder" Command="{Binding NavigateRemoteUpCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Content="New Folder" Margin="8,0,0,0" Padding="8,0" Command="{Binding CreateRemoteFolderCommand}" />
-                </StackPanel>
             </Grid>
 
-            <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox x:Name="LocalPathCombo"
-                          Width="460"
-                          IsEditable="True"
-                          ItemsSource="{Binding RecentLocalPaths}"
-                          Text="{Binding LocalPath, UpdateSourceTrigger=PropertyChanged}"
-                          SelectionChanged="LocalPathCombo_SelectionChanged"
-                          KeyDown="LocalPathCombo_KeyDown" />
-                <Button Content="Browse" Width="90" Margin="8,0,0,0" Command="{Binding BrowseLocalFolderCommand}" />
-            </StackPanel>
+            <Border Grid.Column="0"
+                    Grid.Row="1"
+                    Margin="0,0,0,8"
+                    Padding="4"
+                    Background="#F7F9FC"
+                    BorderBrush="#D6DEE8"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="2" Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox x:Name="RemotePathCombo"
-                          Width="460"
-                          IsEditable="True"
-                          ItemsSource="{Binding RecentRemotePaths}"
-                          Text="{Binding RemotePathDisplay, UpdateSourceTrigger=PropertyChanged}"
-                          SelectionChanged="RemotePathCombo_SelectionChanged"
-                          KeyDown="RemotePathCombo_KeyDown" />
-                <Button Content="Refresh" Width="90" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
-            </StackPanel>
+                    <ComboBox x:Name="LocalPathCombo"
+                              Grid.Column="0"
+                              Margin="0,0,6,0"
+                              MinWidth="180"
+                              IsEditable="True"
+                              ItemsSource="{Binding RecentLocalPaths}"
+                              Text="{Binding LocalPath, Mode=OneWay}"
+                              SelectionChanged="LocalPathCombo_SelectionChanged"
+                              DropDownClosed="LocalPathCombo_DropDownClosed"
+                              KeyDown="LocalPathCombo_KeyDown" />
+                    <Button Grid.Column="1" Width="34" Margin="0,0,4,0" ToolTip="Browse local folder" Command="{Binding BrowseLocalFolderCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE8B7;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Grid.Column="2" Width="34" Margin="0,0,4,0" ToolTip="Up one folder" Command="{Binding NavigateLocalUpCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                    <Button Grid.Column="3" Width="34" ToolTip="Create local folder" Command="{Binding CreateLocalFolderCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE710;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="2" Grid.Row="1" Margin="0,0,0,8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0"
+                        Padding="4"
+                        Background="#F7F9FC"
+                        BorderBrush="#D6DEE8"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <ComboBox x:Name="RemotePathCombo"
+                                  Grid.Column="0"
+                                  Margin="0,0,6,0"
+                                  MinWidth="180"
+                                  IsEditable="True"
+                                  ItemsSource="{Binding RecentRemotePathDisplayOptions}"
+                                  Text="{Binding RemotePathDisplay, Mode=OneWay}"
+                                  SelectionChanged="RemotePathCombo_SelectionChanged"
+                                  DropDownClosed="RemotePathCombo_DropDownClosed"
+                                  KeyDown="RemotePathCombo_KeyDown" />
+                        <Button Grid.Column="1" Width="34" Margin="0,0,4,0" ToolTip="Refresh remote path" Command="{Binding LoadRemoteDirectoryCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE72C;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="2" Width="34" Margin="0,0,4,0" ToolTip="Up one folder" Command="{Binding NavigateRemoteUpCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE74A;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="3" Width="34" ToolTip="Create remote folder" Command="{Binding CreateRemoteFolderCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE710;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1"
+                        Margin="0,4,0,0"
+                        Padding="4"
+                        Background="#F7F9FC"
+                        BorderBrush="#D6DEE8"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Grid Grid.Column="0" Margin="0,0,6,0">
+                            <TextBox x:Name="RemoteSearchTextBox"
+                                     MinWidth="180"
+                                     VerticalContentAlignment="Center"
+                                     Text="{Binding RemoteSearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                     KeyDown="RemoteSearchTextBox_KeyDown"
+                                     ToolTip="Search remote files and folders recursively" />
+                            <TextBlock Text="Search remote..."
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#7F7F7F"
+                                       IsHitTestVisible="False">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Text, ElementName=RemoteSearchTextBox}" Value="" />
+                                                    <Condition Binding="{Binding IsKeyboardFocusWithin, ElementName=RemoteSearchTextBox}" Value="False" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                        <ComboBox Grid.Column="1"
+                                  Width="120"
+                                  Margin="0,0,4,0"
+                                  ItemsSource="{Binding RemoteSearchScopeOptions}"
+                                  SelectedItem="{Binding SelectedRemoteSearchScope}" />
+                        <Button Grid.Column="2"
+                                Width="34"
+                                Margin="0,0,4,0"
+                                ToolTip="Search remote"
+                                Command="{Binding SearchRemoteCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Text="&#xE721;"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="3"
+                                Width="34"
+                                Margin="0,0,4,0"
+                                ToolTip="Cancel remote search"
+                                Command="{Binding CancelRemoteSearchCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Text="&#xE711;"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="4"
+                                Width="34"
+                                ToolTip="Clear remote search"
+                                Command="{Binding ClearRemoteSearchCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Text="&#xE894;"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
 
             <DataGrid x:Name="LocalGrid"
                       Grid.Column="0"
@@ -198,6 +329,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <DataGrid x:Name="RemoteGrid"
@@ -213,9 +345,10 @@
                           Sorting="RemoteGrid_Sorting"
                           MouseDoubleClick="RemoteGrid_MouseDoubleClick">
                     <DataGrid.ContextMenu>
-                        <ContextMenu>
+                        <ContextMenu Opened="RemoteGridContextMenu_Opened">
                             <MenuItem Header="Download Selection (Start Now)" Click="RemoteDownloadStartNow_Click" />
                             <MenuItem Header="Download Selection (Add to Queue)" Click="RemoteDownloadAddToQueue_Click" />
+                            <MenuItem x:Name="RemoteGoToFileLocationMenuItem" Header="Go to file location" Click="RemoteGoToFileLocation_Click" />
                             <Separator />
                             <MenuItem Header="Rename" Click="RemoteRename_Click" />
                             <MenuItem Header="Delete" Click="RemoteDelete_Click" />
@@ -243,6 +376,7 @@
                         </DataGridTemplateColumn>
                         <DataGridTextColumn x:Name="RemoteTypeColumn" Header="Type" Binding="{Binding Converter={StaticResource EntryTypeConverter}}" Width="90" SortMemberPath="IsDirectory" />
                         <DataGridTextColumn x:Name="RemoteSizeColumn" Header="Size" Binding="{Binding Converter={StaticResource EntrySizeConverter}}" Width="120" SortMemberPath="Length" />
+                        <DataGridTextColumn x:Name="RemotePathColumn" Header="Path" Binding="{Binding FullPath}" Width="240" MinWidth="200" SortMemberPath="FullPath" Visibility="Collapsed" />
                         <DataGridTextColumn x:Name="RemoteModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="LastWriteTime" />
                         <DataGridTextColumn x:Name="RemoteCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="CreatedTime" />
                         <DataGridTextColumn x:Name="RemoteAuthorColumn" Header="Author" Binding="{Binding Author}" Width="300" MinWidth="220" SortMemberPath="Author" />
@@ -292,7 +426,7 @@
                         BorderThickness="1"
                         CornerRadius="6"
                         Margin="10"
-                        Visibility="{Binding IsRemoteLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        Visibility="{Binding IsRemoteLoadingOverlayVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel VerticalAlignment="Center"
                                 HorizontalAlignment="Center">
                         <TextBlock Text="{Binding RemoteLoadingMessage}"
@@ -314,6 +448,27 @@
                         Content="Load more"
                         Command="{Binding LoadMoreRemoteEntriesCommand}"
                         Visibility="{Binding HasMoreRemoteEntries, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                <StatusBar Grid.Row="2"
+                           Margin="0,6,0,0"
+                           Background="#F7F9FC"
+                           BorderBrush="#D6DEE8"
+                           BorderThickness="1">
+                    <StatusBarItem>
+                        <TextBlock Foreground="#405A78">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="{Binding RemoteSearchStatusMessage}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding RemoteSearchStatusMessage}" Value="">
+                                            <Setter Property="Text" Value="Ready" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StatusBarItem>
+                </StatusBar>
             </Grid>
         </Grid>
 
@@ -321,55 +476,102 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <TextBlock FontWeight="SemiBold" Margin="0,0,0,8" Text="Transfer Queue" />
-            <Grid Grid.Row="1" Margin="0,0,0,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+            <Border Grid.Row="1"
+                    Margin="0,0,0,6"
+                    Padding="6,4"
+                    Background="#F7F9FC"
+                    BorderBrush="#D6DEE8"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <TextBlock Text="Status" VerticalAlignment="Center" />
-                    <ComboBox Width="130"
+                    <TextBlock Grid.Column="0" Text="Status" VerticalAlignment="Center" />
+                    <ComboBox Grid.Column="1"
+                              Width="130"
                               Margin="8,0,0,0"
                               ItemsSource="{Binding QueueStatusFilterOptions}"
                               SelectedItem="{Binding SelectedQueueStatusFilter}" />
-                    <TextBlock Text="Direction" VerticalAlignment="Center" Margin="12,0,0,0" />
-                    <ComboBox Width="130"
+                    <TextBlock Grid.Column="2" Text="Direction" VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <ComboBox Grid.Column="3"
+                              Width="130"
                               Margin="8,0,0,0"
                               ItemsSource="{Binding QueueDirectionFilterOptions}"
                               SelectedItem="{Binding SelectedQueueDirectionFilter}" />
-                    <Button Content="Show All" Margin="10,0,10,0" Padding="8,0" Command="{Binding ShowAllQueueFiltersCommand}" />
+                    <Button Grid.Column="4"
+                            Margin="10,0,0,0"
+                            Padding="8,0"
+                            Command="{Binding ShowAllQueueFiltersCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE894;" VerticalAlignment="Center" />
+                            <TextBlock Text="Show All" Margin="6,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Border>
 
-                    <Button Width="36" Height="30" ToolTip="Pause selected" Command="{Binding PauseSelectedJobCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Resume selected" Command="{Binding ResumeSelectedJobCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Retry selected" Command="{Binding RetrySelectedJobCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE72C;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Cancel selected" Command="{Binding CancelSelectedJobCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE711;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" Foreground="DimGray" Text="{Binding SelectedQueueCountText}" />
-                </StackPanel>
+            <Border Grid.Row="2"
+                    Margin="0,0,0,8"
+                    Padding="6,4"
+                    Background="#F7F9FC"
+                    BorderBrush="#D6DEE8"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Width="36" Height="30" ToolTip="Pause all queue jobs" Command="{Binding PauseAllQueueCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Run queued jobs" Command="{Binding RunQueueCommand}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
-                    <Button Margin="10,0,0,0" Padding="8,0" ToolTip="Clear completed and canceled queue items" Content="Clear Completed/Canceled" Command="{Binding ClearCompletedCanceledQueueCommand}" />
-                </StackPanel>
-            </Grid>
-            <DataGrid Grid.Row="2"
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Button Width="36" Height="30" ToolTip="Pause selected" Command="{Binding PauseSelectedJobCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Resume selected" Command="{Binding ResumeSelectedJobCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Retry selected" Command="{Binding RetrySelectedJobCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE72C;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Cancel selected" Command="{Binding CancelSelectedJobCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE711;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <TextBlock Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="DimGray"
+                                   Text="{Binding SelectedQueueCountText}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Margin="0,0,10,0"
+                                Padding="8,0"
+                                ToolTip="Clear completed and canceled queue items"
+                                Content="Clear Completed/Canceled"
+                                Command="{Binding ClearCompletedCanceledQueueCommand}" />
+                        <Button Width="36" Height="30" ToolTip="Pause all queue jobs" Command="{Binding PauseAllQueueCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE769;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Width="36" Height="30" Margin="8,0,0,0" ToolTip="Run queued jobs" Command="{Binding RunQueueCommand}">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <DataGrid Grid.Row="3"
                       x:Name="QueueGrid"
                       ItemsSource="{Binding QueueItemsView}"
                       SelectedItem="{Binding SelectedQueueItem}"

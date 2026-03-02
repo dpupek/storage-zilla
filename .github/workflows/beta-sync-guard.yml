@@ -1,0 +1,50 @@
+name: Beta Sync Guard
+
+on:
+  push:
+    branches:
+      - beta
+  pull_request:
+    branches:
+      - beta
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  beta-sync-guard:
+    name: beta-sync-guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify beta contains main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main beta
+
+          MAIN_REF="origin/main"
+          BETA_REF="origin/beta"
+          MAIN_SHA="$(git rev-parse "${MAIN_REF}")"
+          BETA_SHA="$(git rev-parse "${BETA_REF}")"
+
+          echo "main: ${MAIN_SHA}"
+          echo "beta: ${BETA_SHA}"
+
+          if git merge-base --is-ancestor "${MAIN_SHA}" "${BETA_SHA}"; then
+            echo "PASS: beta contains main."
+            exit 0
+          fi
+
+          echo "FAIL: beta is behind main."
+          echo "Fix with:"
+          echo "  git switch beta"
+          echo "  git fetch origin"
+          echo "  git merge origin/main"
+          echo "  git push origin beta"
+          exit 1

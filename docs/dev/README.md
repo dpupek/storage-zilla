@@ -46,7 +46,10 @@ dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c
   - Managed by Nerdbank.GitVersioning (`version.json`)
   - Pipeline computes versions automatically from Git history
   - About dialog remains aligned with assembly informational version
-  - MSIX package version uses four-part format (`x.y.z.0`)
+  - MSIX package version uses four-part format (`x.y.z.r`) with channel revision:
+    - `beta` -> `x.y.z.10000`
+    - `prod` -> `x.y.z.20000`
+  - This ensures beta-to-prod installs upgrade in place without requiring uninstall for same base version.
   - Also publishes an unsigned `x64` MSI artifact for internal/manual install scenarios.
   - Also publishes a portable `win-x64` ZIP package with self-contained binaries.
   - Also publishes a public signing certificate (`StorageZilla-Signing-PublicKey.cer`) and `RELEASE-NOTES.md`.
@@ -61,6 +64,17 @@ git push -u origin beta   # first push only
 # git push origin beta
 ```
 3. Verify run in GitHub Actions: `Release MSIX Beta`.
+
+### Beta Must Not Lag Main
+- Repo rule: `beta` is guarded by `Beta Sync Guard`.
+- Requirement: before new changes are merged into `beta`, `beta` must already contain the latest `main`.
+- If guard fails:
+```bash
+git switch beta
+git fetch origin
+git merge origin/main
+git push origin beta
+```
 
 ### Trigger a Production Release
 1. Merge/promote validated changes from `beta` to `main`.
@@ -114,6 +128,26 @@ git push origin beta
 - Serilog file sink is enabled.
 - Current desktop default level: `Debug`.
 - Logs write under local app data.
+
+## Azure Files Search Reliability (Lessons Applied)
+- Keep remote search incremental and user-visible for long-running traversals.
+- Always flush partial match buffers on a timer; do not wait only for large batch thresholds.
+- Serialize remote reads and enforce latest-only semantics so cancel/restart does not leak stale results.
+- For remote browsing/paging flows, add cancellation checkpoints before UI/state mutation to avoid stale load operations reverting the active path.
+- Keep editable path controls one-way from VM state and update VM path only on explicit user actions (dropdown pick / Enter).
+- Keep long-running search progress/status adjacent to result context (remote pane status bar), not in crowded top command areas.
+- Prefer deterministic command bars (`Border + Grid` with `*` + `Auto` columns) over WPF `ToolBarTray` when combo/text controls must stretch reliably.
+- Keep path normalization/formatting centralized in `IPathDisplayFormatter` (local fallback root + remote `//` display contract) to avoid UI/control drift.
+- Route remote browse/search/load-more work through `IRemoteOperationCoordinator` so cancel reasons and operation types are consistently logged.
+- Use dispatcher-safe command state refresh (`NotifyCanExecuteChanged`) from async callbacks to prevent cross-thread WPF command exceptions.
+- Emit searchable diagnostics for support triage:
+  - `RunId`/version lifecycle (`requested`, `progress`, `completed`/`canceled`/`stale`)
+  - page-level traversal (`directory`, continuation presence, `entries`, `elapsedMs`)
+  - progress counters (`scannedEntries`, `scannedDirectories`)
+- Treat a sparse-match query over huge directories as expected behavior; optimize progress clarity rather than prematurely terminating traversal.
+
+Reference workflow/checklist:
+- `.agents/skills/azure-files-search-reliability/SKILL.md`
 
 ## Quick Memory MCP
 Endpoint: `storage-zilla`

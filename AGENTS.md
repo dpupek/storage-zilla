@@ -48,6 +48,7 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
   - action gating (`IRemoteActionPolicyService`)
   - mirror planning/execution (`IMirrorPlannerService`, `IMirrorExecutionService`)
 - Reuse existing services before adding new ones (YAGNI/DTSTTCPW).
+- For Azure Files recursive search behavior and troubleshooting, follow `.agents/skills/azure-files-search-reliability/SKILL.md`.
 
 ## UI Conventions
 - `MainViewModel` owns UI state and command wiring; avoid direct SDK calls from code-behind.
@@ -65,6 +66,10 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - Use Serilog for info/debug/error with file output.
 - Current baseline log level is `Debug`; keep rich context fields (`subscription`, `account`, `share`, `path`) in logs.
 - Log location: `%LOCALAPPDATA%/AzureFilesSync/logs`.
+- For remote search diagnostics, include lifecycle + paging telemetry:
+  - run identifiers (`RunId`, version)
+  - page traversal context (directory, continuation, entries/page, elapsed)
+  - periodic progress (`ScannedEntries`, `ScannedDirectories`, completion/cancel outcome)
 - Store temporary scratch artifacts (downloaded logs, throwaway exports, ad hoc diagnostics) in the repo-local `.tmp/` folder.
 - Do not leave temp files at repo root; clean up `.tmp/` entries when no longer needed.
 

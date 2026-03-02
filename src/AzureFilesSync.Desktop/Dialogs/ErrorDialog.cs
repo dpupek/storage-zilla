@@ -10,29 +10,13 @@ public static class ErrorDialog
     {
         var details = BuildDetails(summary, exception);
         Log.Error(exception, "{Summary}", summary);
-
-        var owner = Application.Current?.MainWindow;
-        var dialog = new ErrorDialogWindow(summary, details);
-        if (owner is { IsLoaded: true, IsVisible: true })
-        {
-            dialog.Owner = owner;
-        }
-
-        dialog.ShowDialog();
+        ShowDialogOnUiThread(summary, details);
     }
 
     public static void ShowMessage(string summary, string details)
     {
         Log.Error("{Summary}: {Details}", summary, details);
-
-        var owner = Application.Current?.MainWindow;
-        var dialog = new ErrorDialogWindow(summary, details);
-        if (owner is { IsLoaded: true, IsVisible: true })
-        {
-            dialog.Owner = owner;
-        }
-
-        dialog.ShowDialog();
+        ShowDialogOnUiThread(summary, details);
     }
 
     private static string BuildDetails(string summary, Exception exception)
@@ -53,5 +37,42 @@ public static class ErrorDialog
         sb.AppendLine("StackTrace:");
         sb.AppendLine(exception.ToString());
         return sb.ToString();
+    }
+
+    private static void ShowDialogOnUiThread(string summary, string details)
+    {
+        try
+        {
+            var app = Application.Current;
+            var dispatcher = app?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                ShowDialogInternal(summary, details);
+                return;
+            }
+
+            dispatcher.Invoke(() => ShowDialogInternal(summary, details));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to display error dialog. Summary={Summary}", summary);
+        }
+    }
+
+    private static void ShowDialogInternal(string summary, string details)
+    {
+        var owner = Application.Current?.MainWindow;
+        var dialog = new ErrorDialogWindow(summary, details);
+        if (owner is { IsLoaded: true, IsVisible: true })
+        {
+            dialog.Owner = owner;
+        }
+
+        dialog.ShowDialog();
     }
 }

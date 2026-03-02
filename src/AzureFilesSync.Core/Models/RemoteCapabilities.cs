@@ -4,6 +4,7 @@ public enum RemoteAccessState
 {
     Unknown,
     Accessible,
+    EndpointUnavailable,
     PermissionDenied,
     NotFound,
     TransientFailure,

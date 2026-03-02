@@ -62,6 +62,9 @@
 - [x] Add queue status/direction filters with `Show All` reset.
 - [x] Enable horizontal scrolling for local and remote file grids.
 - [x] Alphabetically sort subscription, storage account, and file share selectors.
+- [x] Convert local/remote pane command rows to deterministic toolbar-style command bars (`Border + Grid`) so path/search controls stretch reliably with pane width.
+- [x] Move remote search scan progress/status to a bottom status bar in the remote pane instead of top control rows.
+- [x] Convert queue controls into two command bars (filters + actions) for clearer operator workflow.
 - [x] Add explicit conflict policies (`Ask`, `Skip`, `Overwrite`, `Rename`) for upload/download queueing.
 - [x] Add transfer conflict settings for upload/download defaults and persist them in connection profile.
 - [x] Add pre-queue conflict prompt with batch-scoped `Do for all` handling and `Cancel Batch`.
@@ -80,6 +83,8 @@
 - [x] Add clearer DNS/network failure guidance that explicitly mentions antivirus/proxy/firewall allow rules for Azure Files endpoints.
 - [x] Add a `Copy diagnostics` action for share discovery failures (endpoint + exception summary).
 - [x] Add preflight endpoint connectivity validation for selected storage accounts to fail fast before long share-enumeration retries.
+- [x] Apply delete actions to full local/remote multi-selection with count-based confirmation and status summaries.
+- [x] Add remote recursive search with scope selection (current path/share root), cancellable execution, search-mode result view, and clear-to-browse restore flow.
 
 ## Phase 9: Update Distribution (child-0008)
 - [x] Add in-app manual update check command in Help/About.
@@ -90,6 +95,20 @@
 - [x] Add unsigned MSI artifact publishing alongside signed MSIX in release pipeline.
 - [x] Add MSI install UX: license dialog, install directory selection, Start Menu shortcut.
 - [x] Brand MSI welcome/license banner assets from project logo set.
+
+## Phase 10: Runtime Reliability + Network UX (child-0009)
+- [x] Prevent transfer worker crashes from unobserved estimate-phase exceptions; continue processing subsequent jobs.
+- [x] Marshal error dialogs safely to the UI dispatcher for background/unobserved exception paths.
+- [x] Classify endpoint host-resolution failures as a distinct remote capability state (`EndpointUnavailable`).
+- [x] Show actionable non-modal guidance for account-specific Azure Files DNS endpoint failures.
+- [x] Treat superseded/canceled remote read operations as expected debug-level behavior.
+- [x] Create and link follow-up GitHub issues #14, #15, and #16 from issue #13 triage.
+- [x] Fix remote search progress stalls after cancel/restart scenarios by serializing remote read operations and flushing partial match batches during long non-match scans.
+- [x] Stabilize remote path/address bar updates for large paged folders (`HasMore=true`) so opening `Courseware`-scale directories does not briefly show path then revert/blank.
+- [x] Harden remote page-load state transitions with cancellation guards to prevent stale operations from mutating current path/view state.
+- [x] Introduce shared path display formatter service to keep local/remote path normalization and display contracts consistent (`//` root, slash normalization, trimmed local paths).
+- [x] Introduce remote operation coordinator with typed operations (`Browse`, `LoadMore`, `Search`, `SelectionChange`) and cancel-reason tracking for richer diagnostics.
+- [x] Harden command `CanExecute` notifications with dispatcher-safe updates to prevent cross-thread UI exceptions during asynchronous remote state transitions.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.

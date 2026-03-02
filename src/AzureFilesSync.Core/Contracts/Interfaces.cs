@@ -39,11 +39,37 @@ public interface IAzureFilesBrowserService
     Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken);
 }
 
+public interface IRemoteSearchService
+{
+    IAsyncEnumerable<RemoteSearchProgress> SearchIncrementalAsync(RemoteSearchRequest request, CancellationToken cancellationToken);
+}
+
 public interface IRemoteReadTaskScheduler
 {
     Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken);
     Task<TResult> RunLatestAsync<TResult>(Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken);
     void CancelCurrent();
+}
+
+public interface IRemoteOperationCoordinator
+{
+    RemoteOperationCancelReason LastCancelReason { get; }
+    Task RunLatestAsync(
+        RemoteOperationType operationType,
+        Func<RemoteOperationScope, CancellationToken, Task> operation,
+        CancellationToken cancellationToken);
+    Task<TResult> RunLatestAsync<TResult>(
+        RemoteOperationType operationType,
+        Func<RemoteOperationScope, CancellationToken, Task<TResult>> operation,
+        CancellationToken cancellationToken);
+    void CancelCurrent(RemoteOperationCancelReason reason = RemoteOperationCancelReason.UserRequested);
+}
+
+public interface IPathDisplayFormatter
+{
+    string NormalizeLocalPath(string? path, string fallbackPath);
+    string NormalizeRemotePathDisplay(string? value);
+    string FormatRemotePathDisplay(string? path);
 }
 
 public interface ILocalFileOperationsService

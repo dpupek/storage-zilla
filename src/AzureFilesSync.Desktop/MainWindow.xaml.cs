@@ -3,8 +3,10 @@ using AzureFilesSync.Desktop.Branding;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.ViewModels;
 using System.Collections;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -14,6 +16,9 @@ namespace AzureFilesSync.Desktop;
 
 public partial class MainWindow : Window
 {
+    private readonly MainViewModel _viewModel;
+    private bool _suppressPathSelectionHandlers;
+
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
@@ -25,7 +30,12 @@ public partial class MainWindow : Window
         {
             // Keep window startup resilient if icon resource resolution fails.
         }
-        DataContext = viewModel;
+        _viewModel = viewModel;
+        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _viewModel.RecentLocalPaths.CollectionChanged += RecentPaths_CollectionChanged;
+        _viewModel.RecentRemotePaths.CollectionChanged += RecentPaths_CollectionChanged;
+        Closed += OnClosed;
+        DataContext = _viewModel;
         Loaded += OnLoaded;
     }
 
@@ -35,9 +45,48 @@ public partial class MainWindow : Window
         {
             ApplyLayout(LocalGrid, GetLocalColumnMap(), vm.LocalGridLayout);
             ApplyLayout(RemoteGrid, GetRemoteColumnMap(), vm.RemoteGridLayout);
+            UpdateRemoteSearchUiState(vm);
+            SyncPathComboTextFromViewModel();
         }
 
         await PersistLayoutsAsync();
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        _viewModel.RecentLocalPaths.CollectionChanged -= RecentPaths_CollectionChanged;
+        _viewModel.RecentRemotePaths.CollectionChanged -= RecentPaths_CollectionChanged;
+        Closed -= OnClosed;
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not MainViewModel vm)
+        {
+            return;
+        }
+
+        if (e.PropertyName is nameof(MainViewModel.IsRemoteSearchActive) or nameof(MainViewModel.IsRemoteLoading))
+        {
+            Dispatcher.Invoke(() => UpdateRemoteSearchUiState(vm));
+        }
+
+        if (e.PropertyName is nameof(MainViewModel.LocalPath) or nameof(MainViewModel.RemotePathDisplay))
+        {
+            Dispatcher.Invoke(SyncPathComboTextFromViewModel);
+        }
+    }
+
+    private void RecentPaths_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        Dispatcher.Invoke(SyncPathComboTextFromViewModel);
+    }
+
+    private void UpdateRemoteSearchUiState(MainViewModel vm)
+    {
+        RemotePathColumn.Visibility = vm.IsRemoteSearchActive ? Visibility.Visible : Visibility.Collapsed;
+        RemoteGoToFileLocationMenuItem.Visibility = vm.IsRemoteSearchActive ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void LocalUploadStartNow_Click(object sender, RoutedEventArgs e) => await QueueLocalAsync(startImmediately: true);
@@ -132,13 +181,25 @@ public partial class MainWindow : Window
 
     private async Task DeleteLocalAsync()
     {
-        if (DataContext is not MainViewModel vm || LocalGrid.SelectedItem is not LocalEntry entry || entry.Name == "..")
+        if (DataContext is not MainViewModel vm)
         {
             return;
         }
 
+        var selectedEntries = LocalGrid.SelectedItems.Count > 0
+            ? LocalGrid.SelectedItems.Cast<object>().OfType<LocalEntry>().Where(x => x.Name != "..").ToList()
+            : BuildFallbackSelection(LocalGrid.SelectedItem).Cast<object>().OfType<LocalEntry>().Where(x => x.Name != "..").ToList();
+
+        if (selectedEntries.Count == 0)
+        {
+            return;
+        }
+
+        var confirmMessage = selectedEntries.Count == 1
+            ? $"Delete '{selectedEntries[0].Name}'{(selectedEntries[0].IsDirectory ? " recursively" : string.Empty)}?"
+            : $"Delete {selectedEntries.Count} selected local items?";
         var confirm = MessageBox.Show(
-            $"Delete '{entry.Name}'{(entry.IsDirectory ? " recursively" : string.Empty)}?",
+            confirmMessage,
             "Delete Confirmation",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -149,7 +210,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await vm.DeleteLocalAsync(entry, recursive: true);
+            await vm.DeleteLocalSelectionAsync(selectedEntries, recursive: true);
         }
         catch (Exception ex)
         {
@@ -181,13 +242,25 @@ public partial class MainWindow : Window
 
     private async Task DeleteRemoteAsync()
     {
-        if (DataContext is not MainViewModel vm || RemoteGrid.SelectedItem is not RemoteEntry entry || entry.Name == "..")
+        if (DataContext is not MainViewModel vm)
         {
             return;
         }
 
+        var selectedEntries = RemoteGrid.SelectedItems.Count > 0
+            ? RemoteGrid.SelectedItems.Cast<object>().OfType<RemoteEntry>().Where(x => x.Name != "..").ToList()
+            : BuildFallbackSelection(RemoteGrid.SelectedItem).Cast<object>().OfType<RemoteEntry>().Where(x => x.Name != "..").ToList();
+
+        if (selectedEntries.Count == 0)
+        {
+            return;
+        }
+
+        var confirmMessage = selectedEntries.Count == 1
+            ? $"Delete remote '{selectedEntries[0].Name}'{(selectedEntries[0].IsDirectory ? " recursively" : string.Empty)}?"
+            : $"Delete {selectedEntries.Count} selected remote items?";
         var confirm = MessageBox.Show(
-            $"Delete remote '{entry.Name}'{(entry.IsDirectory ? " recursively" : string.Empty)}?",
+            confirmMessage,
             "Delete Confirmation",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -198,11 +271,35 @@ public partial class MainWindow : Window
 
         try
         {
-            await vm.DeleteRemoteAsync(entry, recursive: true);
+            await vm.DeleteRemoteSelectionAsync(selectedEntries, recursive: true);
         }
         catch (Exception ex)
         {
             ErrorDialog.Show("Failed to delete remote entry.", ex);
+        }
+    }
+
+    private async void RemoteGoToFileLocation_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        var entry = (sender as MenuItem)?.DataContext as RemoteEntry
+            ?? RemoteGrid.SelectedItem as RemoteEntry;
+        if (entry is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await vm.GoToRemoteEntryLocationAsync(entry);
+        }
+        catch (Exception ex)
+        {
+            ErrorDialog.Show("Failed to go to file location.", ex);
         }
     }
 
@@ -239,7 +336,13 @@ public partial class MainWindow : Window
 
     private async void LocalPathCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        if (_suppressPathSelectionHandlers || DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        // Ignore selection churn caused by ItemsSource/text synchronization when the user is not actively picking a dropdown item.
+        if (!combo.IsDropDownOpen)
         {
             return;
         }
@@ -256,7 +359,13 @@ public partial class MainWindow : Window
 
     private async void RemotePathCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        if (_suppressPathSelectionHandlers || DataContext is not MainViewModel vm || sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        // Ignore selection churn caused by ItemsSource/text synchronization when the user is not actively picking a dropdown item.
+        if (!combo.IsDropDownOpen)
         {
             return;
         }
@@ -295,6 +404,47 @@ public partial class MainWindow : Window
         await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
     }
 
+    private void LocalPathCombo_DropDownClosed(object sender, EventArgs e) => SyncPathComboTextFromViewModel();
+
+    private void RemotePathCombo_DropDownClosed(object sender, EventArgs e) => SyncPathComboTextFromViewModel();
+
+    private void SyncPathComboTextFromViewModel()
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        _suppressPathSelectionHandlers = true;
+        try
+        {
+            if (!string.Equals(LocalPathCombo.Text, vm.LocalPath, StringComparison.Ordinal))
+            {
+                LocalPathCombo.Text = vm.LocalPath;
+            }
+
+            if (!string.Equals(RemotePathCombo.Text, vm.RemotePathDisplay, StringComparison.Ordinal))
+            {
+                RemotePathCombo.Text = vm.RemotePathDisplay;
+            }
+        }
+        finally
+        {
+            _suppressPathSelectionHandlers = false;
+        }
+    }
+
+    private async void RemoteSearchTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await vm.SearchRemoteCommand.ExecuteAsync(null);
+    }
+
     private void QueueGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (DataContext is not MainViewModel vm)
@@ -313,6 +463,14 @@ public partial class MainWindow : Window
         }
 
         vm.UpdateSelectedRemoteSelection(RemoteGrid.SelectedItems);
+    }
+
+    private void RemoteGridContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            UpdateRemoteSearchUiState(vm);
+        }
     }
 
     private async void LocalColumnToggle_Click(object sender, RoutedEventArgs e)
@@ -373,6 +531,7 @@ public partial class MainWindow : Window
             {
                 "Size" => "Length",
                 "Modified" => "LastWriteTime",
+                "Path" => "FullPath",
                 "Type" => "IsDirectory",
                 _ => "Name"
             };
@@ -505,6 +664,7 @@ public partial class MainWindow : Window
                 "LastWriteTime" => Nullable.Compare(GetLastWrite(x), GetLastWrite(y)),
                 "CreatedTime" => Nullable.Compare(GetCreated(x), GetCreated(y)),
                 "Author" => string.Compare(GetAuthor(x), GetAuthor(y), true, CultureInfo.CurrentCulture),
+                "FullPath" => string.Compare(GetFullPath(x), GetFullPath(y), true, CultureInfo.CurrentCulture),
                 "IsDirectory" => GetIsDirectory(y).CompareTo(GetIsDirectory(x)),
                 _ => string.Compare(GetName(x), GetName(y), true, CultureInfo.CurrentCulture)
             };
@@ -534,6 +694,13 @@ public partial class MainWindow : Window
         {
             LocalEntry local => local.Name,
             RemoteEntry remote => remote.Name,
+            _ => string.Empty
+        };
+
+        private static string GetFullPath(object? item) => item switch
+        {
+            LocalEntry local => local.FullPath,
+            RemoteEntry remote => remote.FullPath,
             _ => string.Empty
         };
 

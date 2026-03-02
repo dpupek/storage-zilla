@@ -2,6 +2,8 @@ using Azure;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
 using AzureFilesSync.Infrastructure.Azure;
+using System.Net.Http;
+using System.Net.Sockets;
 
 namespace AzureFilesSync.IntegrationTests;
 
@@ -61,6 +63,37 @@ public sealed class RemoteCapabilityServiceIntegrationTests
         Assert.Equal(404, notFound.HttpStatus);
         Assert.Equal(RemoteAccessState.TransientFailure, transient.State);
         Assert.Equal(503, transient.HttpStatus);
+        #endregion
+    }
+
+    [Fact]
+    public async Task RemoteCapabilityService_MapsDnsHostNotFound_ToEndpointUnavailable()
+    {
+        #region Arrange
+        var browser = new TestAzureFilesBrowserService
+        {
+            Behavior = _ =>
+            {
+                var socket = new SocketException((int)SocketError.HostNotFound);
+                var http = new HttpRequestException("No such host is known. (storage.file.core.windows.net:443)", socket);
+                throw new RequestFailedException("No such host is known. (storage.file.core.windows.net:443)", http);
+            }
+        };
+        var service = new RemoteCapabilityService(browser, new RemoteErrorInterpreter());
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(0, browser.CallCount);
+        #endregion
+
+        #region Act
+        var snapshot = await service.RefreshAsync(ValidContext, CancellationToken.None);
+        #endregion
+
+        #region Assert
+        Assert.Equal(RemoteAccessState.EndpointUnavailable, snapshot.State);
+        Assert.Equal("DnsHostNotFound", snapshot.ErrorCode);
+        Assert.Contains("file.core.windows.net", snapshot.UserMessage, StringComparison.OrdinalIgnoreCase);
         #endregion
     }
 
