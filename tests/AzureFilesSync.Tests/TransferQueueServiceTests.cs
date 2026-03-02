@@ -286,7 +286,7 @@ public sealed class TransferQueueServiceTests
     }
 
     [Fact]
-    public async Task EstimateSizeFailure_FirstJobFails_SecondJobStillCompletes()
+    public async Task EstimateSizeFailure_OneJobFails_AndRemainingJobCompletes()
     {
         #region Arrange
         var executor = new FailingFirstEstimateTransferExecutor();
@@ -307,20 +307,23 @@ public sealed class TransferQueueServiceTests
             condition: () =>
             {
                 var snapshots = queue.Snapshot();
-                var first = snapshots.SingleOrDefault(x => x.JobId == firstJobId);
-                var second = snapshots.SingleOrDefault(x => x.JobId == secondJobId);
-                return first?.Status == TransferJobStatus.Failed &&
-                       second?.Status == TransferJobStatus.Completed;
+                var completedCount = snapshots.Count(x => x.Status == TransferJobStatus.Completed);
+                var failedCount = snapshots.Count(x => x.Status == TransferJobStatus.Failed);
+                return completedCount == 1 && failedCount == 1;
             },
             timeout: TimeSpan.FromSeconds(20));
         #endregion
 
         #region Assert
         Assert.True(settled);
-        var first = queue.Snapshot().Single(x => x.JobId == firstJobId);
-        var second = queue.Snapshot().Single(x => x.JobId == secondJobId);
-        Assert.Equal(TransferJobStatus.Failed, first.Status);
-        Assert.Equal(TransferJobStatus.Completed, second.Status);
+        var snapshots = queue.Snapshot();
+        var failedJob = snapshots.Single(x => x.Status == TransferJobStatus.Failed);
+        var completedJob = snapshots.Single(x => x.Status == TransferJobStatus.Completed);
+        Assert.Contains("Estimate failure for test.", failedJob.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            (failedJob.JobId == firstJobId && completedJob.JobId == secondJobId) ||
+            (failedJob.JobId == secondJobId && completedJob.JobId == firstJobId),
+            "Either queued job may run first; one must fail estimate and the other must still complete.");
         #endregion
     }
 
