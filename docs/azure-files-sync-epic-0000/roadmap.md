@@ -62,6 +62,9 @@
 - [x] Add queue status/direction filters with `Show All` reset.
 - [x] Enable horizontal scrolling for local and remote file grids.
 - [x] Alphabetically sort subscription, storage account, and file share selectors.
+- [x] Convert local/remote pane command rows to deterministic toolbar-style command bars (`Border + Grid`) so path/search controls stretch reliably with pane width.
+- [x] Move remote search scan progress/status to a bottom status bar in the remote pane instead of top control rows.
+- [x] Convert queue controls into two command bars (filters + actions) for clearer operator workflow.
 - [x] Add explicit conflict policies (`Ask`, `Skip`, `Overwrite`, `Rename`) for upload/download queueing.
 - [x] Add transfer conflict settings for upload/download defaults and persist them in connection profile.
 - [x] Add pre-queue conflict prompt with batch-scoped `Do for all` handling and `Cancel Batch`.

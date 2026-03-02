@@ -135,6 +135,8 @@ git push origin beta
 - Serialize remote reads and enforce latest-only semantics so cancel/restart does not leak stale results.
 - For remote browsing/paging flows, add cancellation checkpoints before UI/state mutation to avoid stale load operations reverting the active path.
 - Keep editable path controls one-way from VM state and update VM path only on explicit user actions (dropdown pick / Enter).
+- Keep long-running search progress/status adjacent to result context (remote pane status bar), not in crowded top command areas.
+- Prefer deterministic command bars (`Border + Grid` with `*` + `Auto` columns) over WPF `ToolBarTray` when combo/text controls must stretch reliably.
 - Emit searchable diagnostics for support triage:
   - `RunId`/version lifecycle (`requested`, `progress`, `completed`/`canceled`/`stale`)
   - page-level traversal (`directory`, continuation presence, `entries`, `elapsedMs`)

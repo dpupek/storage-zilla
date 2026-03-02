@@ -28,6 +28,10 @@
 ## Search
 - Query returns a few early matches then scans a very large low-match directory; buffered match updates can delay visible UI progress if not flushed.
 - User cancels a long-running search and immediately starts a new one; stale read work can leak into perceived status without strict latest-only scheduling.
+- Search status near top command controls can be missed during long scans if users focus on grid results.
+
+## UI Layout
+- WPF `ToolBar`/`ToolBarTray` overflow behavior can collapse or unpredictably size embedded stretch controls (combo/text inputs), causing unusable command rows.
 
 ## Mitigations
 - Explicit error messages and retry controls.
@@ -47,3 +51,5 @@
 - Remote read scheduler enforces latest-operation semantics to avoid overlap when canceling and restarting remote searches.
 - Remote folder paging/navigation now enforces cancellation checkpoints before capability/page state mutations to prevent stale operations from resetting the current path.
 - Remote path dropdown text is synchronized from authoritative view-model state after remote refreshes so large folders with `Load more` do not flash and clear the address field.
+- Remote search status is anchored in a bottom pane status bar for persistent visibility during long scans.
+- Use deterministic command-bar layout (`Border + Grid`, star/auto columns) instead of WPF `ToolBarTray` for pane controls that require reliable stretching.

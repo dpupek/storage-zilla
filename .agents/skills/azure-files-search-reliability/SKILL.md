@@ -18,6 +18,8 @@ Use this skill when working on remote search behavior, especially for large Azur
 3. Emit heartbeat progress even when no new matches appear.
 4. Serialize remote read operations and enforce latest-only behavior.
 5. Treat superseded/canceled operations as expected debug-level outcomes.
+6. Surface search progress near the results grid (pane status bar), not only near command inputs.
+7. For stretch-heavy WPF controls (path/search inputs), prefer deterministic `Border + Grid` command bars over `ToolBarTray` overflow layout.
 
 ## Diagnostics Contract
 For each search run, log:
@@ -31,6 +33,9 @@ For each search run, log:
   - Maintain run versioning and stale-run guards.
   - Preserve cancellation semantics and clear status messaging.
   - Avoid modal errors for expected cancel/stale paths.
+- `MainWindow.xaml`:
+  - Keep remote search status in pane status bar with a non-empty fallback (for example `Ready`).
+  - Use `Grid` star/auto columns for command bars so path/search inputs resize with pane width.
 - `RemoteReadTaskScheduler`:
   - Cancel previous operation.
   - Await prior execution settle before starting latest operation.
