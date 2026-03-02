@@ -53,3 +53,6 @@
 - Remote path dropdown text is synchronized from authoritative view-model state after remote refreshes so large folders with `Load more` do not flash and clear the address field.
 - Remote search status is anchored in a bottom pane status bar for persistent visibility during long scans.
 - Use deterministic command-bar layout (`Border + Grid`, star/auto columns) instead of WPF `ToolBarTray` for pane controls that require reliable stretching.
+- Centralize path parsing/formatting via `IPathDisplayFormatter` so root and separator behavior stays consistent across view model and UI bindings.
+- Route remote browse/search/load-more/selection loads through `IRemoteOperationCoordinator` to retain latest-only semantics plus explicit cancel reasons in logs.
+- Marshal command-state notifications (`NotifyCanExecuteChanged`) through the dispatcher to avoid thread-affinity faults when async operations complete on non-UI continuations.

@@ -106,6 +106,9 @@
 - [x] Fix remote search progress stalls after cancel/restart scenarios by serializing remote read operations and flushing partial match batches during long non-match scans.
 - [x] Stabilize remote path/address bar updates for large paged folders (`HasMore=true`) so opening `Courseware`-scale directories does not briefly show path then revert/blank.
 - [x] Harden remote page-load state transitions with cancellation guards to prevent stale operations from mutating current path/view state.
+- [x] Introduce shared path display formatter service to keep local/remote path normalization and display contracts consistent (`//` root, slash normalization, trimmed local paths).
+- [x] Introduce remote operation coordinator with typed operations (`Browse`, `LoadMore`, `Search`, `SelectionChange`) and cancel-reason tracking for richer diagnostics.
+- [x] Harden command `CanExecute` notifications with dispatcher-safe updates to prevent cross-thread UI exceptions during asynchronous remote state transitions.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.

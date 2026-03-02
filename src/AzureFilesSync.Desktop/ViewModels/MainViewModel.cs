@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Azure;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Core.Services;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.Models;
 using AzureFilesSync.Desktop.Services;
@@ -40,7 +41,8 @@ public partial class MainViewModel : ObservableObject
     private readonly IAuthenticationService _authenticationService;
     private readonly IAzureDiscoveryService _azureDiscoveryService;
     private readonly IStorageEndpointPreflightService _storageEndpointPreflightService;
-    private readonly IRemoteReadTaskScheduler _remoteReadTaskScheduler;
+    private readonly IRemoteOperationCoordinator _remoteOperationCoordinator;
+    private readonly IPathDisplayFormatter _pathDisplayFormatter;
     private readonly ILocalBrowserService _localBrowserService;
     private readonly IAzureFilesBrowserService _azureFilesBrowserService;
     private readonly IRemoteSearchService _remoteSearchService;
@@ -64,7 +66,8 @@ public partial class MainViewModel : ObservableObject
     private bool _isUpdatingRemoteSelection;
     private DateTimeOffset _lastLocalRefreshUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastRemoteRefreshUtc = DateTimeOffset.MinValue;
-    private string _lastSuccessfulLocalPath = NormalizeLocalPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    private readonly string _localPathFallbackRoot = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    private string _lastSuccessfulLocalPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     private string _lastSuccessfulRemotePath = string.Empty;
     private readonly Lock _remoteEnrichmentLock = new();
     private readonly HashSet<string> _remoteEnrichmentInFlight = [];
@@ -331,12 +334,15 @@ public partial class MainViewModel : ObservableObject
         IRemoteActionPolicyService remoteActionPolicyService,
         IAppUpdateService appUpdateService,
         IUserHelpContentService userHelpContentService,
-        TimeSpan? remoteOpenDirectoryTimeout = null)
+        TimeSpan? remoteOpenDirectoryTimeout = null,
+        IRemoteOperationCoordinator? remoteOperationCoordinator = null,
+        IPathDisplayFormatter? pathDisplayFormatter = null)
     {
         _authenticationService = authenticationService;
         _azureDiscoveryService = azureDiscoveryService;
         _storageEndpointPreflightService = storageEndpointPreflightService;
-        _remoteReadTaskScheduler = remoteReadTaskScheduler;
+        _remoteOperationCoordinator = remoteOperationCoordinator ?? new SchedulerBackedRemoteOperationCoordinator(remoteReadTaskScheduler);
+        _pathDisplayFormatter = pathDisplayFormatter ?? new PathDisplayFormatter();
         _localBrowserService = localBrowserService;
         _azureFilesBrowserService = azureFilesBrowserService;
         _remoteSearchService = remoteSearchService;
@@ -445,6 +451,7 @@ public partial class MainViewModel : ObservableObject
         var previousPath = _lastSuccessfulRemotePath;
         var snapshot = CaptureRemoteViewSnapshot();
         await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.Browse,
             loadingMessage: "Loading remote directory...",
             clearGridFirst: false,
             showSpinnerAfterDelay: false,
@@ -462,6 +469,7 @@ public partial class MainViewModel : ObservableObject
     private async Task LoadMoreRemoteEntriesAsync()
     {
         await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.LoadMore,
             loadingMessage: "Loading more remote entries...",
             clearGridFirst: false,
             showSpinnerAfterDelay: false,
@@ -499,6 +507,7 @@ public partial class MainViewModel : ObservableObject
             RemotePath);
         var snapshot = CaptureRemoteViewSnapshot();
         var success = await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.Search,
             loadingMessage: $"Searching '{query}'...",
             clearGridFirst: true,
             showSpinnerAfterDelay: true,
@@ -720,7 +729,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         Interlocked.Increment(ref _remoteSearchRunVersion);
-        _remoteReadTaskScheduler.CancelCurrent();
+        _remoteOperationCoordinator.CancelCurrent(RemoteOperationCancelReason.UserRequested);
         RemoteSearchStatusMessage =
             $"Search canceled. Showing {RemoteEntries.Count} match(es). Searched {_remoteSearchLastScannedEntries} item(s) in {_remoteSearchLastScannedDirectories} folder(s).";
         Log.Debug("Remote search cancel requested.");
@@ -728,6 +737,7 @@ public partial class MainViewModel : ObservableObject
     }
 
     private async Task<bool> ExecuteRemoteReadTaskAsync(
+        RemoteOperationType operationType,
         string loadingMessage,
         bool clearGridFirst,
         bool showSpinnerAfterDelay,
@@ -756,12 +766,36 @@ public partial class MainViewModel : ObservableObject
         var spinnerTask = showSpinnerAfterDelay
             ? DelayShowRemoteSpinnerAsync(spinnerCts.Token)
             : Task.CompletedTask;
+        RemoteOperationScope? operationScope = null;
 
         try
         {
-            var success = await _remoteReadTaskScheduler.RunLatestAsync(
-                token => RunRemoteOperationOnUiThreadAsync(operation, token),
+            var success = await _remoteOperationCoordinator.RunLatestAsync(
+                operationType,
+                (scope, token) =>
+                {
+                    operationScope = scope;
+                    Log.Debug(
+                        "Remote operation started. Type={OperationType} CorrelationId={CorrelationId} Sequence={Sequence} Message={LoadingMessage}",
+                        scope.OperationType,
+                        scope.CorrelationId,
+                        scope.Sequence,
+                        loadingMessage);
+                    return RunRemoteOperationOnUiThreadAsync(operation, token);
+                },
                 schedulerCancellationToken);
+            if (operationScope.HasValue)
+            {
+                var scope = operationScope.Value;
+                Log.Debug(
+                    "Remote operation completed. Type={OperationType} CorrelationId={CorrelationId} Sequence={Sequence} Success={Success} Message={LoadingMessage}",
+                    scope.OperationType,
+                    scope.CorrelationId,
+                    scope.Sequence,
+                    success,
+                    loadingMessage);
+            }
+
             if (!IsCurrentRemoteReadInvocation(invocationVersion))
             {
                 Log.Debug("Ignored stale remote read completion. Message={LoadingMessage}", loadingMessage);
@@ -794,14 +828,23 @@ public partial class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(StatusQueueText));
             }
 
-            Log.Warning("Remote read operation timed out. Message={LoadingMessage}", loadingMessage);
+            Log.Warning(
+                "Remote read operation timed out. Message={LoadingMessage} OperationType={OperationType} CorrelationId={CorrelationId}",
+                loadingMessage,
+                operationType,
+                operationScope?.CorrelationId);
             return false;
         }
         catch (OperationCanceledException)
         {
             if (IsCurrentRemoteReadInvocation(invocationVersion))
             {
-                Log.Debug("Remote read operation canceled or replaced. Message={LoadingMessage}", loadingMessage);
+                Log.Debug(
+                    "Remote read operation canceled or replaced. Message={LoadingMessage} CancelReason={CancelReason} OperationType={OperationType} CorrelationId={CorrelationId}",
+                    loadingMessage,
+                    _remoteOperationCoordinator.LastCancelReason,
+                    operationType,
+                    operationScope?.CorrelationId);
             }
             else
             {
@@ -823,7 +866,12 @@ public partial class MainViewModel : ObservableObject
                 await onFailureRollbackAsync();
             }
 
-            Log.Error(ex, "Remote read operation failed. Message={LoadingMessage}", loadingMessage);
+            Log.Error(
+                ex,
+                "Remote read operation failed. Message={LoadingMessage} OperationType={OperationType} CorrelationId={CorrelationId}",
+                loadingMessage,
+                operationType,
+                operationScope?.CorrelationId);
             ShowError(errorMessage, ex);
             return false;
         }
@@ -844,7 +892,7 @@ public partial class MainViewModel : ObservableObject
                 IsRemoteSpinnerVisible = false;
                 IsRemoteLoading = false;
                 RemoteLoadingMessage = string.Empty;
-                LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+                NotifyCanExecuteChangedSafe(() => LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged());
             }
         }
     }
@@ -1250,6 +1298,7 @@ public partial class MainViewModel : ObservableObject
             RemotePath = parent;
 
             await ExecuteRemoteReadTaskAsync(
+                operationType: RemoteOperationType.Browse,
                 loadingMessage: "Loading parent remote folder...",
                 clearGridFirst: false,
                 showSpinnerAfterDelay: true,
@@ -1441,7 +1490,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            _remoteReadTaskScheduler.CancelCurrent();
+            _remoteOperationCoordinator.CancelCurrent(RemoteOperationCancelReason.SignOut);
             await _authenticationService.SignOutAsync(CancellationToken.None);
             LoginStatus = "Not signed in";
             Subscriptions.Clear();
@@ -2461,6 +2510,7 @@ public partial class MainViewModel : ObservableObject
         RemotePath = entry.FullPath;
 
         await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.Browse,
             loadingMessage: $"Opening '{entry.Name}'...",
             clearGridFirst: false,
             showSpinnerAfterDelay: true,
@@ -2497,6 +2547,7 @@ public partial class MainViewModel : ObservableObject
         ClearRemoteSearchState(clearQuery: false);
 
         var success = await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.Browse,
             loadingMessage: $"Opening '{entry.Name}'...",
             clearGridFirst: false,
             showSpinnerAfterDelay: true,
@@ -2707,39 +2758,11 @@ public partial class MainViewModel : ObservableObject
         ErrorDialog.Show(summary, ex);
     }
 
-    private static string NormalizeLocalPath(string? path)
-    {
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            return path.Trim();
-        }
+    private string NormalizeLocalPath(string? path) => _pathDisplayFormatter.NormalizeLocalPath(path, _localPathFallbackRoot);
 
-        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    }
+    private string NormalizeRemotePathDisplay(string? value) => _pathDisplayFormatter.NormalizeRemotePathDisplay(value);
 
-    private static string NormalizeRemotePathDisplay(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var trimmed = value.Trim();
-        if (trimmed is @"\" or "/")
-        {
-            return string.Empty;
-        }
-
-        return trimmed.Replace('\\', '/').Trim('/');
-    }
-
-    private static string FormatRemotePathDisplay(string? path)
-    {
-        var normalized = NormalizeRemotePathDisplay(path);
-        return string.IsNullOrWhiteSpace(normalized)
-            ? "//"
-            : $"//{normalized}";
-    }
+    private string FormatRemotePathDisplay(string? path) => _pathDisplayFormatter.FormatRemotePathDisplay(path);
 
     private void OnRecentRemotePathsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -2827,40 +2850,40 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnLocalPathChanged(string value)
     {
-        NavigateLocalUpCommand.NotifyCanExecuteChanged();
-        CreateLocalFolderCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => NavigateLocalUpCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => CreateLocalFolderCommand.NotifyCanExecuteChanged());
     }
 
     partial void OnRemotePathChanged(string value)
     {
         Log.Debug("Remote path changed. Path={RemotePath}", value);
         OnPropertyChanged(nameof(RemotePathDisplay));
-        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
-        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
-        SearchRemoteCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => NavigateRemoteUpCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => CreateRemoteFolderCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => SearchRemoteCommand.NotifyCanExecuteChanged());
     }
 
     partial void OnIsRemoteLoadingChanged(bool value)
     {
         OnPropertyChanged(nameof(IsRemoteGridEnabled));
         OnPropertyChanged(nameof(IsRemoteLoadingOverlayVisible));
-        LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
-        NavigateRemoteUpCommand.NotifyCanExecuteChanged();
-        CreateRemoteFolderCommand.NotifyCanExecuteChanged();
-        SearchRemoteCommand.NotifyCanExecuteChanged();
-        ClearRemoteSearchCommand.NotifyCanExecuteChanged();
-        CancelRemoteSearchCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => NavigateRemoteUpCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => CreateRemoteFolderCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => SearchRemoteCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => ClearRemoteSearchCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => CancelRemoteSearchCommand.NotifyCanExecuteChanged());
     }
 
     partial void OnIsRemoteSearchActiveChanged(bool value)
     {
         OnPropertyChanged(nameof(IsRemoteLoadingOverlayVisible));
-        CancelRemoteSearchCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => CancelRemoteSearchCommand.NotifyCanExecuteChanged());
     }
 
     partial void OnHasMoreRemoteEntriesChanged(bool value)
     {
-        LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged());
     }
 
     partial void OnLoginStatusChanged(string value)
@@ -2872,10 +2895,10 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedQueueCountChanged(int value)
     {
-        PauseSelectedJobCommand.NotifyCanExecuteChanged();
-        ResumeSelectedJobCommand.NotifyCanExecuteChanged();
-        RetrySelectedJobCommand.NotifyCanExecuteChanged();
-        CancelSelectedJobCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => PauseSelectedJobCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => ResumeSelectedJobCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => RetrySelectedJobCommand.NotifyCanExecuteChanged());
+        NotifyCanExecuteChangedSafe(() => CancelSelectedJobCommand.NotifyCanExecuteChanged());
         OnPropertyChanged(nameof(SelectedQueueCountText));
     }
 
@@ -2887,6 +2910,18 @@ public partial class MainViewModel : ObservableObject
     partial void OnSelectedQueueDirectionFilterChanged(string value)
     {
         QueueItemsView.Refresh();
+    }
+
+    private static void NotifyCanExecuteChangedSafe(Action notify)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            notify();
+            return;
+        }
+
+        _ = dispatcher.InvokeAsync(notify, DispatcherPriority.Background);
     }
 
     public string SelectedQueueCountText => SelectedQueueCount > 0 ? $"Selected: {SelectedQueueCount}" : string.Empty;
@@ -2922,7 +2957,7 @@ public partial class MainViewModel : ObservableObject
             _selectedRemoteEntries.Add(entry);
         }
 
-        EnqueueDownloadCommand.NotifyCanExecuteChanged();
+        NotifyCanExecuteChangedSafe(() => EnqueueDownloadCommand.NotifyCanExecuteChanged());
     }
 
     private bool HasDownloadableRemoteSelection()
@@ -2993,12 +3028,14 @@ public partial class MainViewModel : ObservableObject
 
     private void StartSelectionChangeLoad(Func<CancellationToken, Task> operation, string errorMessage)
     {
+        _remoteOperationCoordinator.CancelCurrent(RemoteOperationCancelReason.SelectionChanged);
         _ = RunAsync();
 
         async Task RunAsync()
         {
             ClearRemoteSearchState(clearQuery: false);
             await ExecuteRemoteReadTaskAsync(
+                operationType: RemoteOperationType.SelectionChange,
                 loadingMessage: "Loading remote context...",
                 clearGridFirst: true,
                 showSpinnerAfterDelay: false,
@@ -3391,6 +3428,74 @@ public partial class MainViewModel : ObservableObject
             ? $"Deleted {result.Deleted} {scope} item(s)."
             : $"Deleted {result.Deleted} of {result.Total} {scope} item(s). Failed: {result.Failed}.";
         OnPropertyChanged(nameof(StatusQueueText));
+    }
+
+    private sealed class SchedulerBackedRemoteOperationCoordinator : IRemoteOperationCoordinator
+    {
+        private readonly IRemoteReadTaskScheduler _scheduler;
+        private long _sequence;
+        private int _lastCancelReason = (int)RemoteOperationCancelReason.Unknown;
+
+        public SchedulerBackedRemoteOperationCoordinator(IRemoteReadTaskScheduler scheduler)
+        {
+            _scheduler = scheduler;
+        }
+
+        public RemoteOperationCancelReason LastCancelReason => (RemoteOperationCancelReason)Volatile.Read(ref _lastCancelReason);
+
+        public Task RunLatestAsync(
+            RemoteOperationType operationType,
+            Func<RemoteOperationScope, CancellationToken, Task> operation,
+            CancellationToken cancellationToken)
+        {
+            return RunLatestAsync(
+                operationType,
+                async (scope, token) =>
+                {
+                    await operation(scope, token);
+                    return true;
+                },
+                cancellationToken);
+        }
+
+        public async Task<TResult> RunLatestAsync<TResult>(
+            RemoteOperationType operationType,
+            Func<RemoteOperationScope, CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken)
+        {
+            var scope = CreateScope(operationType);
+            Volatile.Write(ref _lastCancelReason, (int)RemoteOperationCancelReason.Unknown);
+
+            try
+            {
+                return await _scheduler.RunLatestAsync(token => operation(scope, token), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!cancellationToken.IsCancellationRequested && LastCancelReason == RemoteOperationCancelReason.Unknown)
+                {
+                    Volatile.Write(ref _lastCancelReason, (int)RemoteOperationCancelReason.ReplacedByLatest);
+                }
+
+                throw;
+            }
+        }
+
+        public void CancelCurrent(RemoteOperationCancelReason reason = RemoteOperationCancelReason.UserRequested)
+        {
+            Volatile.Write(ref _lastCancelReason, (int)reason);
+            _scheduler.CancelCurrent();
+        }
+
+        private RemoteOperationScope CreateScope(RemoteOperationType operationType)
+        {
+            return new RemoteOperationScope(
+                operationType,
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow,
+                Interlocked.Increment(ref _sequence),
+                IsUserInitiated: true);
+        }
     }
 
     private sealed record RemoteViewSnapshot(

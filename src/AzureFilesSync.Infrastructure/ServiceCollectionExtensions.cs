@@ -33,7 +33,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAuthenticationService, InteractiveAuthenticationService>();
         services.AddSingleton<IAzureDiscoveryService, AzureDiscoveryService>();
         services.AddSingleton<IStorageEndpointPreflightService, StorageEndpointPreflightService>();
+        services.AddSingleton<IPathDisplayFormatter, PathDisplayFormatter>();
         services.AddSingleton<IRemoteReadTaskScheduler, RemoteReadTaskScheduler>();
+        services.AddSingleton<IRemoteOperationCoordinator, RemoteOperationCoordinator>();
         services.AddSingleton<IAzureFilesBrowserService, AzureFilesBrowserService>();
         services.AddSingleton<IRemoteSearchService, RemoteSearchService>();
         services.AddSingleton<IRemoteFileOperationsService, RemoteFileOperationsService>();

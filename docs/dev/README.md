@@ -137,6 +137,9 @@ git push origin beta
 - Keep editable path controls one-way from VM state and update VM path only on explicit user actions (dropdown pick / Enter).
 - Keep long-running search progress/status adjacent to result context (remote pane status bar), not in crowded top command areas.
 - Prefer deterministic command bars (`Border + Grid` with `*` + `Auto` columns) over WPF `ToolBarTray` when combo/text controls must stretch reliably.
+- Keep path normalization/formatting centralized in `IPathDisplayFormatter` (local fallback root + remote `//` display contract) to avoid UI/control drift.
+- Route remote browse/search/load-more work through `IRemoteOperationCoordinator` so cancel reasons and operation types are consistently logged.
+- Use dispatcher-safe command state refresh (`NotifyCanExecuteChanged`) from async callbacks to prevent cross-thread WPF command exceptions.
 - Emit searchable diagnostics for support triage:
   - `RunId`/version lifecycle (`requested`, `progress`, `completed`/`canceled`/`stale`)
   - page-level traversal (`directory`, continuation presence, `entries`, `elapsedMs`)
