@@ -35,6 +35,15 @@ public sealed record RemoteSearchResult(
     int ScannedDirectories,
     int ScannedEntries);
 
+public sealed record RemoteSearchProgress(
+    IReadOnlyList<RemoteEntry> NewMatches,
+    int TotalMatches,
+    bool IsCompleted,
+    bool IsTruncated,
+    int ScannedDirectories,
+    int ScannedEntries,
+    IReadOnlyList<RemoteEntry>? SnapshotMatches = null);
+
 public sealed record SharePath(string StorageAccountName, string ShareName, string RelativePath)
 {
     public string NormalizeRelativePath()

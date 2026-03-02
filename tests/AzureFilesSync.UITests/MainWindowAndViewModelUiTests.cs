@@ -384,7 +384,7 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
-    public async Task MainViewModel_SearchRemote_EntersSearchMode_WithResults_AndClearRestoresBrowseView()
+    public async Task MainViewModel_SearchRemote_StreamsResultsBeforeCompletion_AndClearRestoresBrowseView()
     {
         #region Arrange
         var browser = new StubAzureBrowserService();
@@ -396,17 +396,35 @@ public sealed class MainWindowAndViewModelUiTests
                     false)
                 : new RemoteDirectoryPage([], null, false);
 
+        var firstChunkReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueSearch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var search = new StubRemoteSearchService
         {
-            SearchBehavior = _ => new RemoteSearchResult(
-                [
-                    new RemoteEntry("file-a.log", "folder-a/file-a.log", false, 12, DateTimeOffset.UtcNow),
-                    new RemoteEntry("file-b.log", "folder-a/file-b.log", false, 15, DateTimeOffset.UtcNow)
-                ],
+            SearchIncrementalBehavior = (_, token) => StreamAsync(token)
+        };
+
+        async IAsyncEnumerable<RemoteSearchProgress> StreamAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("file-a.log", "folder-a/file-a.log", false, 12, DateTimeOffset.UtcNow)],
+                TotalMatches: 1,
+                IsCompleted: false,
                 IsTruncated: false,
                 ScannedDirectories: 1,
-                ScannedEntries: 2)
-        };
+                ScannedEntries: 1);
+
+            firstChunkReady.TrySetResult(true);
+            await continueSearch.Task.WaitAsync(token);
+
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("file-b.log", "folder-a/file-b.log", false, 15, DateTimeOffset.UtcNow)],
+                TotalMatches: 2,
+                IsCompleted: true,
+                IsTruncated: false,
+                ScannedDirectories: 1,
+                ScannedEntries: 2);
+        }
 
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
@@ -436,21 +454,363 @@ public sealed class MainWindowAndViewModelUiTests
         #endregion
 
         #region Act
-        await viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        var runTask = viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        await firstChunkReady.Task;
         #endregion
 
         #region Assert
         Assert.True(viewModel.IsRemoteSearchActive);
-        Assert.Equal(2, viewModel.RemoteEntries.Count);
-        Assert.Contains("Found 2 match(es)", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Contains("Searching", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(viewModel.RemoteGridEntries, x => x.Name == "..");
         Assert.False(viewModel.LoadMoreRemoteEntriesCommand.CanExecute(null));
 
+        continueSearch.TrySetResult(true);
+        await runTask;
+
+        Assert.Equal(2, viewModel.RemoteEntries.Count);
+        Assert.Contains("Found 2 match(es)", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
         await viewModel.ClearRemoteSearchCommand.ExecuteAsync(null);
 
         Assert.False(viewModel.IsRemoteSearchActive);
         Assert.Single(viewModel.RemoteEntries);
         Assert.Contains(viewModel.RemoteGridEntries, x => x.Name == "folder-a");
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_CancelRemoteSearch_KeepsPartialResults_AndSetsCanceledStatus()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageBehavior = (path, _, _) =>
+            string.IsNullOrWhiteSpace(path.NormalizeRelativePath())
+                ? new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false)
+                : new RemoteDirectoryPage([], null, false);
+
+        var firstChunkReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var search = new StubRemoteSearchService
+        {
+            SearchIncrementalBehavior = (_, token) => StreamAsync(token)
+        };
+
+        async IAsyncEnumerable<RemoteSearchProgress> StreamAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("file-a.log", "folder-a/file-a.log", false, 12, DateTimeOffset.UtcNow)],
+                TotalMatches: 1,
+                IsCompleted: false,
+                IsTruncated: false,
+                ScannedDirectories: 1,
+                ScannedEntries: 1);
+
+            firstChunkReady.TrySetResult(true);
+            await Task.Delay(TimeSpan.FromSeconds(10), token);
+            yield return new RemoteSearchProgress([], 1, IsCompleted: true, IsTruncated: false, 1, 1);
+        }
+
+        var scheduler = new CancelAwareRemoteReadTaskScheduler();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService(),
+            remoteSearchService: search,
+            remoteReadTaskScheduler: scheduler);
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        viewModel.RemoteSearchQuery = "file";
+        #endregion
+
+        #region Initial Assert
+        Assert.False(viewModel.IsRemoteLoading);
+        #endregion
+
+        #region Act
+        var runTask = viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        await firstChunkReady.Task;
+        Assert.True(viewModel.CancelRemoteSearchCommand.CanExecute(null));
+        await viewModel.CancelRemoteSearchCommand.ExecuteAsync(null);
+        await runTask;
+        #endregion
+
+        #region Assert
+        Assert.True(viewModel.IsRemoteSearchActive);
+        Assert.False(viewModel.IsRemoteLoading);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Contains("canceled", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_CancelThenRestartSearch_UsesLatestRunResults()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageBehavior = (path, _, _) =>
+            string.IsNullOrWhiteSpace(path.NormalizeRelativePath())
+                ? new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false)
+                : new RemoteDirectoryPage([], null, false);
+
+        var firstChunkReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var searchInvocation = 0;
+        var search = new StubRemoteSearchService
+        {
+            SearchIncrementalBehavior = (_, token) =>
+            {
+                var invocation = System.Threading.Interlocked.Increment(ref searchInvocation);
+                return invocation == 1 ? FirstRunAsync(token) : SecondRunAsync(token);
+            }
+        };
+
+        async IAsyncEnumerable<RemoteSearchProgress> FirstRunAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("first-run.log", "folder-a/first-run.log", false, 12, DateTimeOffset.UtcNow)],
+                TotalMatches: 1,
+                IsCompleted: false,
+                IsTruncated: false,
+                ScannedDirectories: 1,
+                ScannedEntries: 1);
+
+            firstChunkReady.TrySetResult(true);
+            await Task.Delay(TimeSpan.FromSeconds(10), token);
+            yield return new RemoteSearchProgress([], 1, IsCompleted: true, IsTruncated: false, 1, 1);
+        }
+
+        async IAsyncEnumerable<RemoteSearchProgress> SecondRunAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.Yield();
+            token.ThrowIfCancellationRequested();
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("second-run.log", "folder-a/second-run.log", false, 24, DateTimeOffset.UtcNow)],
+                TotalMatches: 1,
+                IsCompleted: true,
+                IsTruncated: false,
+                ScannedDirectories: 1,
+                ScannedEntries: 2);
+        }
+
+        var scheduler = new CancelAwareRemoteReadTaskScheduler();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService(),
+            remoteSearchService: search,
+            remoteReadTaskScheduler: scheduler);
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        viewModel.RemoteSearchQuery = "run";
+        #endregion
+
+        #region Initial Assert
+        Assert.False(viewModel.IsRemoteLoading);
+        #endregion
+
+        #region Act
+        var firstRunTask = viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        await firstChunkReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await viewModel.CancelRemoteSearchCommand.ExecuteAsync(null);
+        await firstRunTask;
+
+        var secondRunTask = viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        await secondRunTask;
+        #endregion
+
+        #region Assert
+        Assert.Equal(2, searchInvocation);
+        Assert.False(viewModel.IsRemoteLoading);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("second-run.log", viewModel.RemoteEntries[0].Name);
+        Assert.Contains("Found 1 match(es)", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SearchRemote_IgnoresSecondInvocationWhileSearchIsActive()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageBehavior = (path, _, _) =>
+            string.IsNullOrWhiteSpace(path.NormalizeRelativePath())
+                ? new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false)
+                : new RemoteDirectoryPage([], null, false);
+
+        var firstChunkReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSearch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invocationCount = 0;
+
+        var search = new StubRemoteSearchService
+        {
+            SearchIncrementalBehavior = (_, token) => StreamAsync(token)
+        };
+
+        async IAsyncEnumerable<RemoteSearchProgress> StreamAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            System.Threading.Interlocked.Increment(ref invocationCount);
+            yield return new RemoteSearchProgress([], 0, IsCompleted: false, IsTruncated: false, 1, 0);
+            firstChunkReady.TrySetResult(true);
+            await releaseSearch.Task.WaitAsync(token);
+            yield return new RemoteSearchProgress(
+                [new RemoteEntry("result.log", "folder-a/result.log", false, 10, DateTimeOffset.UtcNow)],
+                TotalMatches: 1,
+                IsCompleted: true,
+                IsTruncated: false,
+                ScannedDirectories: 1,
+                ScannedEntries: 10);
+        }
+
+        var scheduler = new CancelAwareRemoteReadTaskScheduler();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService(),
+            remoteSearchService: search,
+            remoteReadTaskScheduler: scheduler);
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        viewModel.RemoteSearchQuery = "result";
+        #endregion
+
+        #region Initial Assert
+        Assert.False(viewModel.IsRemoteLoading);
+        #endregion
+
+        #region Act
+        var firstRunTask = viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        await firstChunkReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        releaseSearch.TrySetResult(true);
+        await firstRunTask;
+        #endregion
+
+        #region Assert
+        Assert.Equal(1, invocationCount);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("result.log", viewModel.RemoteEntries[0].Name);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SearchRemote_ReconcilesFromSnapshot_WhenIncrementalMatchesMissing()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService();
+        browser.ListDirectoryPageBehavior = (path, _, _) =>
+            string.IsNullOrWhiteSpace(path.NormalizeRelativePath())
+                ? new RemoteDirectoryPage(
+                    [new RemoteEntry("folder-a", "folder-a", true, 0, DateTimeOffset.UtcNow)],
+                    null,
+                    false)
+                : new RemoteDirectoryPage([], null, false);
+
+        var expected = new RemoteEntry("user.log", "folder-a/user.log", false, 10, DateTimeOffset.UtcNow);
+        var search = new StubRemoteSearchService
+        {
+            SearchIncrementalBehavior = (_, _) =>
+                Stream(
+                [
+                    new RemoteSearchProgress(
+                        [],
+                        TotalMatches: 1,
+                        IsCompleted: false,
+                        IsTruncated: false,
+                        ScannedDirectories: 1,
+                        ScannedEntries: 10,
+                        SnapshotMatches: [expected]),
+                    new RemoteSearchProgress(
+                        [],
+                        TotalMatches: 1,
+                        IsCompleted: true,
+                        IsTruncated: false,
+                        ScannedDirectories: 1,
+                        ScannedEntries: 10,
+                        SnapshotMatches: [expected])
+                ])
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService(),
+            remoteSearchService: search);
+        SetValidRemoteSelection(viewModel);
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        viewModel.RemoteSearchQuery = "user";
+        #endregion
+
+        #region Initial Assert
+        Assert.False(viewModel.IsRemoteLoading);
+        #endregion
+
+        #region Act
+        await viewModel.SearchRemoteCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal(expected.FullPath, viewModel.RemoteEntries[0].FullPath);
+        Assert.Contains("Found 1 match(es)", viewModel.RemoteSearchStatusMessage, StringComparison.OrdinalIgnoreCase);
         #endregion
     }
 
@@ -472,11 +832,17 @@ public sealed class MainWindowAndViewModelUiTests
 
         var search = new StubRemoteSearchService
         {
-            SearchBehavior = _ => new RemoteSearchResult(
-                [new RemoteEntry("file-a.log", "folder-a/file-a.log", false, 12, DateTimeOffset.UtcNow)],
-                IsTruncated: false,
-                ScannedDirectories: 1,
-                ScannedEntries: 1)
+            SearchIncrementalBehavior = (_, _) =>
+                Stream(
+                [
+                    new RemoteSearchProgress(
+                        [new RemoteEntry("file-a.log", "folder-a/file-a.log", false, 12, DateTimeOffset.UtcNow)],
+                        TotalMatches: 1,
+                        IsCompleted: true,
+                        IsTruncated: false,
+                        ScannedDirectories: 1,
+                        ScannedEntries: 1)
+                ])
         };
 
         var viewModel = CreateViewModelWithDependencies(
@@ -1281,12 +1647,13 @@ public sealed class MainWindowAndViewModelUiTests
         IRemoteActionPolicyService remoteActionPolicyService,
         IAppUpdateService? appUpdateService = null,
         IRemoteSearchService? remoteSearchService = null,
+        IRemoteReadTaskScheduler? remoteReadTaskScheduler = null,
         TimeSpan? remoteOpenDirectoryTimeout = null) =>
         new(
             authenticationService,
             discoveryService,
             storageEndpointPreflightService ?? new StubStorageEndpointPreflightService(),
-            new StubRemoteReadTaskScheduler(),
+            remoteReadTaskScheduler ?? new StubRemoteReadTaskScheduler(),
             localBrowserService,
             azureBrowserService,
             remoteSearchService ?? new StubRemoteSearchService(),
@@ -1502,11 +1869,11 @@ public sealed class MainWindowAndViewModelUiTests
 
     private sealed class StubRemoteSearchService : IRemoteSearchService
     {
-        public Func<RemoteSearchRequest, RemoteSearchResult> SearchBehavior { get; set; } =
-            _ => new RemoteSearchResult([], false, 0, 0);
+        public Func<RemoteSearchRequest, CancellationToken, IAsyncEnumerable<RemoteSearchProgress>> SearchIncrementalBehavior { get; set; } =
+            (_, _) => Stream([new RemoteSearchProgress([], 0, IsCompleted: true, IsTruncated: false, 0, 0)]);
 
-        public Task<RemoteSearchResult> SearchAsync(RemoteSearchRequest request, CancellationToken cancellationToken) =>
-            Task.FromResult(SearchBehavior(request));
+        public IAsyncEnumerable<RemoteSearchProgress> SearchIncrementalAsync(RemoteSearchRequest request, CancellationToken cancellationToken) =>
+            SearchIncrementalBehavior(request, cancellationToken);
     }
 
     private sealed class StubRemoteReadTaskScheduler : IRemoteReadTaskScheduler
@@ -1519,6 +1886,72 @@ public sealed class MainWindowAndViewModelUiTests
 
         public void CancelCurrent()
         {
+        }
+    }
+
+    private sealed class CancelAwareRemoteReadTaskScheduler : IRemoteReadTaskScheduler
+    {
+        private readonly Lock _lock = new();
+        private CancellationTokenSource? _currentSource;
+
+        public async Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken)
+        {
+            await RunLatestAsync(
+                async token =>
+                {
+                    await operation(token);
+                    return true;
+                },
+                cancellationToken);
+        }
+
+        public async Task<TResult> RunLatestAsync<TResult>(Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken)
+        {
+            CancellationTokenSource current;
+            lock (_lock)
+            {
+                _currentSource?.Cancel();
+                _currentSource?.Dispose();
+                current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                _currentSource = current;
+            }
+
+            try
+            {
+                return await operation(current.Token);
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    if (ReferenceEquals(_currentSource, current))
+                    {
+                        _currentSource = null;
+                    }
+                }
+
+                current.Dispose();
+            }
+        }
+
+        public void CancelCurrent()
+        {
+            lock (_lock)
+            {
+                _currentSource?.Cancel();
+            }
+        }
+    }
+
+    private static async IAsyncEnumerable<RemoteSearchProgress> Stream(
+        IEnumerable<RemoteSearchProgress> updates,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var update in updates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return update;
+            await Task.Yield();
         }
     }
 

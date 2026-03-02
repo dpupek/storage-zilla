@@ -121,8 +121,9 @@
                           Width="460"
                           IsEditable="True"
                           ItemsSource="{Binding RecentLocalPaths}"
-                          Text="{Binding LocalPath, UpdateSourceTrigger=PropertyChanged}"
+                          Text="{Binding LocalPath, Mode=OneWay}"
                           SelectionChanged="LocalPathCombo_SelectionChanged"
+                          DropDownClosed="LocalPathCombo_DropDownClosed"
                           KeyDown="LocalPathCombo_KeyDown" />
                 <Button Content="Browse" Width="90" Margin="8,0,0,0" Command="{Binding BrowseLocalFolderCommand}" />
             </StackPanel>
@@ -138,8 +139,9 @@
                               Width="280"
                               IsEditable="True"
                               ItemsSource="{Binding RecentRemotePaths}"
-                              Text="{Binding RemotePathDisplay, UpdateSourceTrigger=PropertyChanged}"
+                              Text="{Binding RemotePathDisplay, Mode=OneWay}"
                               SelectionChanged="RemotePathCombo_SelectionChanged"
+                              DropDownClosed="RemotePathCombo_DropDownClosed"
                               KeyDown="RemotePathCombo_KeyDown" />
                     <Button Content="Refresh" Width="70" Margin="8,0,0,0" Command="{Binding LoadRemoteDirectoryCommand}" />
                     <TextBox x:Name="RemoteSearchTextBox"
@@ -160,6 +162,16 @@
                         <TextBlock FontFamily="Segoe MDL2 Assets"
                                    FontSize="12"
                                    Text="&#xE721;"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                    <Button Width="34"
+                            Margin="4,0,0,0"
+                            ToolTip="Cancel remote search"
+                            Command="{Binding CancelRemoteSearchCommand}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12"
+                                   Text="&#xE711;"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center" />
                     </Button>
@@ -256,9 +268,10 @@
                           Sorting="RemoteGrid_Sorting"
                           MouseDoubleClick="RemoteGrid_MouseDoubleClick">
                     <DataGrid.ContextMenu>
-                        <ContextMenu>
+                        <ContextMenu Opened="RemoteGridContextMenu_Opened">
                             <MenuItem Header="Download Selection (Start Now)" Click="RemoteDownloadStartNow_Click" />
                             <MenuItem Header="Download Selection (Add to Queue)" Click="RemoteDownloadAddToQueue_Click" />
+                            <MenuItem x:Name="RemoteGoToFileLocationMenuItem" Header="Go to file location" Click="RemoteGoToFileLocation_Click" />
                             <Separator />
                             <MenuItem Header="Rename" Click="RemoteRename_Click" />
                             <MenuItem Header="Delete" Click="RemoteDelete_Click" />
@@ -286,6 +299,7 @@
                         </DataGridTemplateColumn>
                         <DataGridTextColumn x:Name="RemoteTypeColumn" Header="Type" Binding="{Binding Converter={StaticResource EntryTypeConverter}}" Width="90" SortMemberPath="IsDirectory" />
                         <DataGridTextColumn x:Name="RemoteSizeColumn" Header="Size" Binding="{Binding Converter={StaticResource EntrySizeConverter}}" Width="120" SortMemberPath="Length" />
+                        <DataGridTextColumn x:Name="RemotePathColumn" Header="Path" Binding="{Binding FullPath}" Width="240" MinWidth="200" SortMemberPath="FullPath" Visibility="Collapsed" />
                         <DataGridTextColumn x:Name="RemoteModifiedColumn" Header="Modified" Binding="{Binding LastWriteTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="LastWriteTime" />
                         <DataGridTextColumn x:Name="RemoteCreatedColumn" Header="Date Created" Binding="{Binding CreatedTime, Converter={StaticResource LocalDateTimeConverter}}" Width="180" SortMemberPath="CreatedTime" />
                         <DataGridTextColumn x:Name="RemoteAuthorColumn" Header="Author" Binding="{Binding Author}" Width="300" MinWidth="220" SortMemberPath="Author" />
@@ -335,7 +349,7 @@
                         BorderThickness="1"
                         CornerRadius="6"
                         Margin="10"
-                        Visibility="{Binding IsRemoteLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        Visibility="{Binding IsRemoteLoadingOverlayVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel VerticalAlignment="Center"
                                 HorizontalAlignment="Center">
                         <TextBlock Text="{Binding RemoteLoadingMessage}"

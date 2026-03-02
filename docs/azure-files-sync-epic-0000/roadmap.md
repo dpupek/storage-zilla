@@ -100,6 +100,9 @@
 - [x] Show actionable non-modal guidance for account-specific Azure Files DNS endpoint failures.
 - [x] Treat superseded/canceled remote read operations as expected debug-level behavior.
 - [x] Create and link follow-up GitHub issues #14, #15, and #16 from issue #13 triage.
+- [x] Fix remote search progress stalls after cancel/restart scenarios by serializing remote read operations and flushing partial match batches during long non-match scans.
+- [x] Stabilize remote path/address bar updates for large paged folders (`HasMore=true`) so opening `Courseware`-scale directories does not briefly show path then revert/blank.
+- [x] Harden remote page-load state transitions with cancellation guards to prevent stale operations from mutating current path/view state.
 
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.

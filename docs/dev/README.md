@@ -129,6 +129,21 @@ git push origin beta
 - Current desktop default level: `Debug`.
 - Logs write under local app data.
 
+## Azure Files Search Reliability (Lessons Applied)
+- Keep remote search incremental and user-visible for long-running traversals.
+- Always flush partial match buffers on a timer; do not wait only for large batch thresholds.
+- Serialize remote reads and enforce latest-only semantics so cancel/restart does not leak stale results.
+- For remote browsing/paging flows, add cancellation checkpoints before UI/state mutation to avoid stale load operations reverting the active path.
+- Keep editable path controls one-way from VM state and update VM path only on explicit user actions (dropdown pick / Enter).
+- Emit searchable diagnostics for support triage:
+  - `RunId`/version lifecycle (`requested`, `progress`, `completed`/`canceled`/`stale`)
+  - page-level traversal (`directory`, continuation presence, `entries`, `elapsedMs`)
+  - progress counters (`scannedEntries`, `scannedDirectories`)
+- Treat a sparse-match query over huge directories as expected behavior; optimize progress clarity rather than prematurely terminating traversal.
+
+Reference workflow/checklist:
+- `.agents/skills/azure-files-search-reliability/SKILL.md`
+
 ## Quick Memory MCP
 Endpoint: `storage-zilla`
 

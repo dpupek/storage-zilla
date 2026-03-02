@@ -6,6 +6,7 @@ public sealed class RemoteReadTaskScheduler : IRemoteReadTaskScheduler
 {
     private readonly Lock _lock = new();
     private CancellationTokenSource? _currentSource;
+    private Task _currentExecution = Task.CompletedTask;
     private long _currentVersion;
 
     public Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken)
@@ -22,6 +23,7 @@ public sealed class RemoteReadTaskScheduler : IRemoteReadTaskScheduler
     public async Task<TResult> RunLatestAsync<TResult>(Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken)
     {
         CancellationTokenSource? previousSource;
+        Task previousExecution;
         CancellationTokenSource currentSource;
         var version = 0L;
 
@@ -30,26 +32,52 @@ public sealed class RemoteReadTaskScheduler : IRemoteReadTaskScheduler
             _currentVersion++;
             version = _currentVersion;
             previousSource = _currentSource;
+            previousExecution = _currentExecution;
             currentSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _currentSource = currentSource;
         }
 
         previousSource?.Cancel();
-
-        try
+        Task<TResult>? executionTask = null;
+        executionTask = ExecuteAsync();
+        lock (_lock)
         {
-            var result = await operation(currentSource.Token).ConfigureAwait(false);
-            ThrowIfStale(version, currentSource.Token);
-            return result;
+            _currentExecution = executionTask;
         }
-        finally
+
+        return await executionTask.ConfigureAwait(false);
+
+        async Task<TResult> ExecuteAsync()
         {
-            currentSource.Dispose();
-            lock (_lock)
+            try
             {
-                if (ReferenceEquals(_currentSource, currentSource))
+                try
                 {
-                    _currentSource = null;
+                    await previousExecution.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Previous remote operation failures/cancellations should not block latest execution.
+                }
+
+                var result = await operation(currentSource.Token).ConfigureAwait(false);
+                ThrowIfStale(version, currentSource.Token);
+                return result;
+            }
+            finally
+            {
+                currentSource.Dispose();
+                lock (_lock)
+                {
+                    if (ReferenceEquals(_currentSource, currentSource))
+                    {
+                        _currentSource = null;
+                    }
+
+                    if (executionTask is not null && ReferenceEquals(_currentExecution, executionTask))
+                    {
+                        _currentExecution = Task.CompletedTask;
+                    }
                 }
             }
         }

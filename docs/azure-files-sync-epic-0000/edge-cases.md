@@ -25,6 +25,10 @@
 - Delete operations included accidentally.
 - Large directory trees causing long planning time.
 
+## Search
+- Query returns a few early matches then scans a very large low-match directory; buffered match updates can delay visible UI progress if not flushed.
+- User cancels a long-running search and immediately starts a new one; stale read work can leak into perceived status without strict latest-only scheduling.
+
 ## Mitigations
 - Explicit error messages and retry controls.
 - Checkpoint persistence for resume.
@@ -39,3 +43,7 @@
 - Runtime guard cancels unresolved `Ask` conflicts with explanatory queue message.
 - Worker claim logic ensures single queue run can drain queued jobs.
 - Completed zero-byte transfers render `100%` to avoid false incomplete signal.
+- Remote search now flushes partial match batches on timed heartbeats so UI progress/match visibility does not stall during long non-match scans.
+- Remote read scheduler enforces latest-operation semantics to avoid overlap when canceling and restarting remote searches.
+- Remote folder paging/navigation now enforces cancellation checkpoints before capability/page state mutations to prevent stale operations from resetting the current path.
+- Remote path dropdown text is synchronized from authoritative view-model state after remote refreshes so large folders with `Load more` do not flash and clear the address field.

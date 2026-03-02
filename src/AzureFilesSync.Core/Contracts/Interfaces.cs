@@ -41,7 +41,7 @@ public interface IAzureFilesBrowserService
 
 public interface IRemoteSearchService
 {
-    Task<RemoteSearchResult> SearchAsync(RemoteSearchRequest request, CancellationToken cancellationToken);
+    IAsyncEnumerable<RemoteSearchProgress> SearchIncrementalAsync(RemoteSearchRequest request, CancellationToken cancellationToken);
 }
 
 public interface IRemoteReadTaskScheduler

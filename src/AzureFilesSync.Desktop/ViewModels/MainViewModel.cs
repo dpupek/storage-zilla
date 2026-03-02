@@ -18,6 +18,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Threading;
 
 namespace AzureFilesSync.Desktop.ViewModels;
 
@@ -68,6 +69,10 @@ public partial class MainViewModel : ObservableObject
     private readonly HashSet<string> _remoteEnrichmentInFlight = [];
     private readonly List<RemoteEntry> _selectedRemoteEntries = [];
     private string? _remoteContinuationToken;
+    private long _remoteReadUiStateVersion;
+    private long _remoteSearchRunVersion;
+    private int _remoteSearchLastScannedEntries;
+    private int _remoteSearchLastScannedDirectories;
 
     public ObservableCollection<SubscriptionItem> Subscriptions { get; } = [];
     public ObservableCollection<StorageAccountItem> StorageAccounts { get; } = [];
@@ -132,6 +137,7 @@ public partial class MainViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(EnqueueDownloadCommand))]
     [NotifyCanExecuteChangedFor(nameof(SearchRemoteCommand))]
     [NotifyCanExecuteChangedFor(nameof(ClearRemoteSearchCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CancelRemoteSearchCommand))]
     private bool _isRemoteLoading;
 
     [ObservableProperty]
@@ -155,6 +161,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ClearRemoteSearchCommand))]
     [NotifyCanExecuteChangedFor(nameof(LoadMoreRemoteEntriesCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CancelRemoteSearchCommand))]
     private bool _isRemoteSearchActive;
 
     [ObservableProperty]
@@ -200,6 +207,7 @@ public partial class MainViewModel : ObservableObject
     public string StatusConcurrencyText => $"Concurrency: {TransferMaxConcurrency}";
     public string StatusQueueText => string.IsNullOrWhiteSpace(QueueBatchStatusMessage) ? "Queue: idle" : QueueBatchStatusMessage;
     public bool IsRemoteGridEnabled => !IsRemoteLoading;
+    public bool IsRemoteLoadingOverlayVisible => IsRemoteLoading && !IsRemoteSearchActive;
 
     public string RemotePathDisplay
     {
@@ -443,76 +451,229 @@ public partial class MainViewModel : ObservableObject
     private async Task SearchRemoteAsync()
     {
         var query = RemoteSearchQuery?.Trim() ?? string.Empty;
+        if (IsRemoteLoading)
+        {
+            Log.Debug("Remote search request ignored because remote loading is already in progress.");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(query) || SelectedStorageAccount is null || SelectedFileShare is null)
         {
             return;
         }
 
+        var searchRunVersion = Interlocked.Increment(ref _remoteSearchRunVersion);
+        var searchRunId = Guid.NewGuid();
+        var searchStartedAtUtc = DateTimeOffset.UtcNow;
+        Log.Debug(
+            "Remote search requested. RunId={RunId} Version={Version} Query={Query} Account={Account} Share={Share} Scope={Scope} Path={Path}",
+            searchRunId,
+            searchRunVersion,
+            query,
+            SelectedStorageAccount.Name,
+            SelectedFileShare.Name,
+            SelectedRemoteSearchScope,
+            RemotePath);
         var snapshot = CaptureRemoteViewSnapshot();
-        await ExecuteRemoteReadTaskAsync(
+        var success = await ExecuteRemoteReadTaskAsync(
             loadingMessage: $"Searching '{query}'...",
             clearGridFirst: true,
             showSpinnerAfterDelay: true,
             errorMessage: "Failed to search the remote server.",
             operation: async token =>
             {
+                if (!IsCurrentRemoteSearchRun(searchRunVersion))
+                {
+                    Log.Debug(
+                        "Remote search stale run ignored at start. RunId={RunId} Version={Version} Query={Query}",
+                        searchRunId,
+                        searchRunVersion,
+                        query);
+                    return false;
+                }
+
                 var context = BuildRemoteContext();
                 var capability = await _remoteCapabilityService.RefreshAsync(context, token);
+                if (!IsCurrentRemoteSearchRun(searchRunVersion))
+                {
+                    Log.Debug(
+                        "Remote search stale run ignored after capability refresh. RunId={RunId} Version={Version} Query={Query}",
+                        searchRunId,
+                        searchRunVersion,
+                        query);
+                    return false;
+                }
+
                 ApplyCapability(capability);
                 if (!capability.CanBrowse)
                 {
+                    Log.Warning(
+                        "Remote search aborted because remote browse capability is unavailable. RunId={RunId} Version={Version} Query={Query} Reason={Reason}",
+                        searchRunId,
+                        searchRunVersion,
+                        query,
+                        capability.UserMessage);
                     return false;
                 }
 
                 var startRelativePath = string.Equals(SelectedRemoteSearchScope, RemoteSearchScopeShareRoot, StringComparison.OrdinalIgnoreCase)
                     ? string.Empty
                     : RemotePath;
-                var result = await _remoteSearchService.SearchAsync(
-                    new RemoteSearchRequest(
-                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, startRelativePath),
-                        query,
-                        IncludeDirectories: true,
-                        MaxResults: RemoteSearchMaxResults),
-                    token);
-
                 RemoteEntries.Clear();
-                foreach (var match in result.Matches)
-                {
-                    RemoteEntries.Add(match);
-                }
-
                 _remoteContinuationToken = null;
                 HasMoreRemoteEntries = false;
                 IsRemoteSearchActive = true;
+                _remoteSearchLastScannedEntries = 0;
+                _remoteSearchLastScannedDirectories = 0;
+                RemoteSearchStatusMessage = $"Searching '{query}'... 0 item(s) scanned.";
+                RefreshRemoteGridEntries();
                 var scopeLabel = string.Equals(SelectedRemoteSearchScope, RemoteSearchScopeShareRoot, StringComparison.OrdinalIgnoreCase)
                     ? "share root"
                     : (string.IsNullOrWhiteSpace(RemotePath) ? "current path (root)" : $"current path '{RemotePath}'");
-                RemoteSearchStatusMessage = result.IsTruncated
-                    ? $"Showing first {result.Matches.Count} match(es) for '{query}' from {scopeLabel}. Refine search for more."
-                    : $"Found {result.Matches.Count} match(es) for '{query}' from {scopeLabel}.";
-                RefreshRemoteGridEntries();
                 SelectedRemoteEntry = null;
                 _selectedRemoteEntries.Clear();
                 EnqueueDownloadCommand.NotifyCanExecuteChanged();
 
+                var final = new RemoteSearchProgress([], 0, IsCompleted: true, IsTruncated: false, 0, 0);
+                var lastProgressLogEntries = -1;
+                var lastProgressLogDirectories = -1;
+                await foreach (var progress in _remoteSearchService.SearchIncrementalAsync(
+                                   new RemoteSearchRequest(
+                                       new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, startRelativePath),
+                                       query,
+                                       IncludeDirectories: true,
+                                       MaxResults: RemoteSearchMaxResults),
+                                   token))
+                {
+                    if (!IsCurrentRemoteSearchRun(searchRunVersion))
+                    {
+                        return false;
+                    }
+
+                    final = progress;
+                    _remoteSearchLastScannedEntries = progress.ScannedEntries;
+                    _remoteSearchLastScannedDirectories = progress.ScannedDirectories;
+                    if (progress.NewMatches.Count > 0)
+                    {
+                        foreach (var match in progress.NewMatches)
+                        {
+                            RemoteEntries.Add(match);
+                        }
+
+                        RefreshRemoteGridEntries();
+                        Log.Debug(
+                            "Remote search matches applied. Query={Query} NewMatches={NewMatches} TotalMatches={TotalMatches} RemoteEntries={RemoteEntriesCount} RemoteGridEntries={RemoteGridEntriesCount}",
+                            query,
+                            progress.NewMatches.Count,
+                            progress.TotalMatches,
+                            RemoteEntries.Count,
+                            RemoteGridEntries.Count);
+                    }
+                    else if (progress.SnapshotMatches is { Count: > 0 } snapshot &&
+                             snapshot.Count != RemoteEntries.Count)
+                    {
+                        RemoteEntries.Clear();
+                        foreach (var match in snapshot)
+                        {
+                            RemoteEntries.Add(match);
+                        }
+
+                        RefreshRemoteGridEntries();
+                        Log.Debug(
+                            "Remote search snapshot reconciled. Query={Query} SnapshotMatches={SnapshotMatches} RemoteEntries={RemoteEntriesCount} RemoteGridEntries={RemoteGridEntriesCount}",
+                            query,
+                            snapshot.Count,
+                            RemoteEntries.Count,
+                            RemoteGridEntries.Count);
+                    }
+                    else if (progress.TotalMatches > RemoteEntries.Count)
+                    {
+                        Log.Warning(
+                            "Remote search progress mismatch. Query={Query} ProgressTotalMatches={ProgressTotalMatches} RemoteEntries={RemoteEntriesCount} RemoteGridEntries={RemoteGridEntriesCount}",
+                            query,
+                            progress.TotalMatches,
+                            RemoteEntries.Count,
+                            RemoteGridEntries.Count);
+                    }
+
+                    if (progress.IsCompleted)
+                    {
+                        RemoteSearchStatusMessage = progress.IsTruncated
+                            ? $"Showing first {progress.TotalMatches} match(es) for '{query}' from {scopeLabel}. Searched {progress.ScannedEntries} item(s) in {progress.ScannedDirectories} folder(s). Refine search for more."
+                            : $"Found {progress.TotalMatches} match(es) for '{query}' from {scopeLabel}. Searched {progress.ScannedEntries} item(s) in {progress.ScannedDirectories} folder(s).";
+                    }
+                    else
+                    {
+                        RemoteSearchStatusMessage =
+                            $"Searching '{query}'... {progress.TotalMatches} match(es), {progress.ScannedEntries} item(s) scanned in {progress.ScannedDirectories} folder(s).";
+                    }
+
+                    var shouldLogProgress =
+                        progress.IsCompleted ||
+                        progress.ScannedEntries >= lastProgressLogEntries + 5000 ||
+                        progress.ScannedDirectories >= lastProgressLogDirectories + 250 ||
+                        (progress.ScannedDirectories > 0 && lastProgressLogDirectories < 0);
+                    if (shouldLogProgress)
+                    {
+                        Log.Debug(
+                            "Remote search progress. Query={Query} Matches={Matches} ScannedDirectories={ScannedDirectories} ScannedEntries={ScannedEntries} Completed={Completed}",
+                            query,
+                            progress.TotalMatches,
+                            progress.ScannedDirectories,
+                            progress.ScannedEntries,
+                            progress.IsCompleted);
+                        lastProgressLogEntries = progress.ScannedEntries;
+                        lastProgressLogDirectories = progress.ScannedDirectories;
+                    }
+                }
+
+                if (!IsCurrentRemoteSearchRun(searchRunVersion))
+                {
+                    Log.Debug(
+                        "Remote search stale run ignored before completion. RunId={RunId} Version={Version} Query={Query}",
+                        searchRunId,
+                        searchRunVersion,
+                        query);
+                    return false;
+                }
+
                 Log.Debug(
-                    "Remote search completed. Query={Query} Matches={Matches} Truncated={Truncated} Account={Account} Share={Share} StartPath={StartPath} ScannedDirectories={ScannedDirectories} ScannedEntries={ScannedEntries}",
+                    "Remote search completed. RunId={RunId} Version={Version} Query={Query} Matches={Matches} Truncated={Truncated} Account={Account} Share={Share} StartPath={StartPath} ScannedDirectories={ScannedDirectories} ScannedEntries={ScannedEntries}",
+                    searchRunId,
+                    searchRunVersion,
                     query,
-                    result.Matches.Count,
-                    result.IsTruncated,
+                    final.TotalMatches,
+                    final.IsTruncated,
                     SelectedStorageAccount.Name,
                     SelectedFileShare.Name,
                     startRelativePath,
-                    result.ScannedDirectories,
-                    result.ScannedEntries);
+                    final.ScannedDirectories,
+                    final.ScannedEntries);
                 return true;
             },
             onFailureRollbackAsync: () =>
             {
+                if (!IsCurrentRemoteSearchRun(searchRunVersion))
+                {
+                    return Task.CompletedTask;
+                }
+
                 RestoreRemoteViewSnapshot(snapshot);
                 ClearRemoteSearchState(clearQuery: false);
                 return Task.CompletedTask;
             });
+
+        Log.Debug(
+            "Remote search finished. RunId={RunId} Version={Version} Success={Success} Query={Query} DurationMs={DurationMs} LastScannedEntries={ScannedEntries} LastScannedDirectories={ScannedDirectories} IsRemoteLoading={IsRemoteLoading} IsRemoteSearchActive={IsRemoteSearchActive}",
+            searchRunId,
+            searchRunVersion,
+            success,
+            query,
+            (DateTimeOffset.UtcNow - searchStartedAtUtc).TotalMilliseconds,
+            _remoteSearchLastScannedEntries,
+            _remoteSearchLastScannedDirectories,
+            IsRemoteLoading,
+            IsRemoteSearchActive);
     }
 
     [RelayCommand(CanExecute = nameof(CanClearRemoteSearch))]
@@ -527,6 +688,22 @@ public partial class MainViewModel : ObservableObject
         await LoadRemoteDirectoryAsync();
     }
 
+    [RelayCommand(CanExecute = nameof(CanCancelRemoteSearch))]
+    private Task CancelRemoteSearchAsync()
+    {
+        if (!IsRemoteLoading || !IsRemoteSearchActive)
+        {
+            return Task.CompletedTask;
+        }
+
+        Interlocked.Increment(ref _remoteSearchRunVersion);
+        _remoteReadTaskScheduler.CancelCurrent();
+        RemoteSearchStatusMessage =
+            $"Search canceled. Showing {RemoteEntries.Count} match(es). Searched {_remoteSearchLastScannedEntries} item(s) in {_remoteSearchLastScannedDirectories} folder(s).";
+        Log.Debug("Remote search cancel requested.");
+        return Task.CompletedTask;
+    }
+
     private async Task<bool> ExecuteRemoteReadTaskAsync(
         string loadingMessage,
         bool clearGridFirst,
@@ -537,6 +714,8 @@ public partial class MainViewModel : ObservableObject
         TimeSpan? operationTimeout = null,
         string? timeoutMessage = null)
     {
+        var invocationVersion = Interlocked.Increment(ref _remoteReadUiStateVersion);
+
         if (clearGridFirst)
         {
             ClearRemoteEntriesAndPaging();
@@ -557,7 +736,15 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var success = await _remoteReadTaskScheduler.RunLatestAsync(operation, schedulerCancellationToken);
+            var success = await _remoteReadTaskScheduler.RunLatestAsync(
+                token => RunRemoteOperationOnUiThreadAsync(operation, token),
+                schedulerCancellationToken);
+            if (!IsCurrentRemoteReadInvocation(invocationVersion))
+            {
+                Log.Debug("Ignored stale remote read completion. Message={LoadingMessage}", loadingMessage);
+                return false;
+            }
+
             if (!success && onFailureRollbackAsync is not null)
             {
                 await onFailureRollbackAsync();
@@ -567,6 +754,12 @@ public partial class MainViewModel : ObservableObject
         }
         catch (OperationCanceledException) when (operationTimeoutCts?.IsCancellationRequested == true)
         {
+            if (!IsCurrentRemoteReadInvocation(invocationVersion))
+            {
+                Log.Debug("Ignored stale remote read timeout. Message={LoadingMessage}", loadingMessage);
+                return false;
+            }
+
             if (onFailureRollbackAsync is not null)
             {
                 await onFailureRollbackAsync();
@@ -583,16 +776,31 @@ public partial class MainViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            Log.Debug("Remote read operation canceled or replaced.");
+            if (IsCurrentRemoteReadInvocation(invocationVersion))
+            {
+                Log.Debug("Remote read operation canceled or replaced. Message={LoadingMessage}", loadingMessage);
+            }
+            else
+            {
+                Log.Debug("Ignored stale remote read cancellation. Message={LoadingMessage}", loadingMessage);
+            }
+
             return false;
         }
         catch (Exception ex)
         {
+            if (!IsCurrentRemoteReadInvocation(invocationVersion))
+            {
+                Log.Debug(ex, "Ignored stale remote read failure. Message={LoadingMessage}", loadingMessage);
+                return false;
+            }
+
             if (onFailureRollbackAsync is not null)
             {
                 await onFailureRollbackAsync();
             }
 
+            Log.Error(ex, "Remote read operation failed. Message={LoadingMessage}", loadingMessage);
             ShowError(errorMessage, ex);
             return false;
         }
@@ -608,11 +816,30 @@ public partial class MainViewModel : ObservableObject
                 // Ignore delayed spinner cancellation.
             }
 
-            IsRemoteSpinnerVisible = false;
-            IsRemoteLoading = false;
-            RemoteLoadingMessage = string.Empty;
-            LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+            if (IsCurrentRemoteReadInvocation(invocationVersion))
+            {
+                IsRemoteSpinnerVisible = false;
+                IsRemoteLoading = false;
+                RemoteLoadingMessage = string.Empty;
+                LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
+            }
         }
+    }
+
+    private static Task<bool> RunRemoteOperationOnUiThreadAsync(
+        Func<CancellationToken, Task<bool>> operation,
+        CancellationToken cancellationToken)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            return operation(cancellationToken);
+        }
+
+        return dispatcher
+            .InvokeAsync(() => operation(cancellationToken), DispatcherPriority.Normal, cancellationToken)
+            .Task
+            .Unwrap();
     }
 
     private async Task DelayShowRemoteSpinnerAsync(CancellationToken cancellationToken)
@@ -627,6 +854,12 @@ public partial class MainViewModel : ObservableObject
             // No-op; operation completed before spinner threshold.
         }
     }
+
+    private bool IsCurrentRemoteReadInvocation(long invocationVersion) =>
+        Interlocked.Read(ref _remoteReadUiStateVersion) == invocationVersion;
+
+    private bool IsCurrentRemoteSearchRun(long searchRunVersion) =>
+        Interlocked.Read(ref _remoteSearchRunVersion) == searchRunVersion;
 
     private async Task<bool> LoadRemoteDirectoryPageAsync(
         bool reset,
@@ -652,10 +885,12 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var capability = await _remoteCapabilityService.RefreshAsync(context, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             ApplyCapability(capability);
 
             if (!capability.CanBrowse)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (await TryFallbackToRemoteRootOnNotFoundAsync(
                         context,
                         capability,
@@ -678,6 +913,7 @@ public partial class MainViewModel : ObservableObject
             var path = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
             var continuationToken = reset ? null : _remoteContinuationToken;
             var page = await _azureFilesBrowserService.ListDirectoryPageAsync(path, continuationToken, RemotePageSize, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (reset)
             {
@@ -696,6 +932,7 @@ public partial class MainViewModel : ObservableObject
             if (reset)
             {
                 AddRecentPath(RecentRemotePaths, RemotePath);
+                OnPropertyChanged(nameof(RemotePathDisplay));
                 await PersistProfileAsync();
             }
             _lastSuccessfulRemotePath = context.Path;
@@ -714,7 +951,9 @@ public partial class MainViewModel : ObservableObject
         }
         catch (RequestFailedException ex)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var capability = await _remoteCapabilityService.RefreshAsync(context, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             ApplyCapability(capability);
 
             if (await TryFallbackToRemoteRootOnNotFoundAsync(
@@ -755,6 +994,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (reset)
             {
                 ClearRemoteEntriesAndPaging();
@@ -794,6 +1034,7 @@ public partial class MainViewModel : ObservableObject
             context.ShareName,
             context.Path);
 
+        cancellationToken.ThrowIfCancellationRequested();
         RemotePath = string.Empty;
         return await LoadRemoteDirectoryPageAsync(
             reset: true,
@@ -816,6 +1057,8 @@ public partial class MainViewModel : ObservableObject
     {
         IsRemoteSearchActive = false;
         RemoteSearchStatusMessage = string.Empty;
+        _remoteSearchLastScannedEntries = 0;
+        _remoteSearchLastScannedDirectories = 0;
         if (clearQuery)
         {
             RemoteSearchQuery = string.Empty;
@@ -2176,7 +2419,7 @@ public partial class MainViewModel : ObservableObject
 
         if (IsRemoteSearchActive)
         {
-            await OpenRemoteSearchResultAsync(entry);
+            await GoToRemoteEntryLocationAsync(entry);
             return;
         }
 
@@ -2210,9 +2453,9 @@ public partial class MainViewModel : ObservableObject
             timeoutMessage: "Opening remote folder timed out. View restored to previous path.");
     }
 
-    private async Task OpenRemoteSearchResultAsync(RemoteEntry entry)
+    public async Task GoToRemoteEntryLocationAsync(RemoteEntry? entry)
     {
-        if (SelectedStorageAccount is null || SelectedFileShare is null || entry.Name == "..")
+        if (entry is null || SelectedStorageAccount is null || SelectedFileShare is null || entry.Name == "..")
         {
             return;
         }
@@ -2498,6 +2741,7 @@ public partial class MainViewModel : ObservableObject
         !string.IsNullOrWhiteSpace(RemoteSearchQuery) &&
         (RemoteCapability?.CanBrowse ?? true);
     private bool CanClearRemoteSearch() => IsRemoteSearchActive && !IsRemoteLoading;
+    private bool CanCancelRemoteSearch() => IsRemoteSearchActive && IsRemoteLoading;
     private bool CanActOnSelectedQueueItems() => SelectedQueueCount > 0;
     private bool CanClearCompletedCanceledQueue() => QueueItems.Any(x => x.Status is TransferJobStatus.Completed or TransferJobStatus.Canceled);
     private bool CanCopyRemoteDiagnostics() => !string.IsNullOrWhiteSpace(RemoteDiagnosticsDetails);
@@ -2553,6 +2797,7 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnRemotePathChanged(string value)
     {
+        Log.Debug("Remote path changed. Path={RemotePath}", value);
         OnPropertyChanged(nameof(RemotePathDisplay));
         NavigateRemoteUpCommand.NotifyCanExecuteChanged();
         CreateRemoteFolderCommand.NotifyCanExecuteChanged();
@@ -2562,11 +2807,19 @@ public partial class MainViewModel : ObservableObject
     partial void OnIsRemoteLoadingChanged(bool value)
     {
         OnPropertyChanged(nameof(IsRemoteGridEnabled));
+        OnPropertyChanged(nameof(IsRemoteLoadingOverlayVisible));
         LoadMoreRemoteEntriesCommand.NotifyCanExecuteChanged();
         NavigateRemoteUpCommand.NotifyCanExecuteChanged();
         CreateRemoteFolderCommand.NotifyCanExecuteChanged();
         SearchRemoteCommand.NotifyCanExecuteChanged();
         ClearRemoteSearchCommand.NotifyCanExecuteChanged();
+        CancelRemoteSearchCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsRemoteSearchActiveChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsRemoteLoadingOverlayVisible));
+        CancelRemoteSearchCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnHasMoreRemoteEntriesChanged(bool value)
@@ -2932,6 +3185,7 @@ public partial class MainViewModel : ObservableObject
     private void RefreshRemoteGridEntries()
     {
         RemoteGridEntries.Clear();
+        OnPropertyChanged(nameof(RemotePathDisplay));
         var normalized = RemotePath.Replace('\\', '/').Trim('/');
         if (!IsRemoteSearchActive && !string.IsNullOrWhiteSpace(normalized))
         {
@@ -2945,6 +3199,13 @@ public partial class MainViewModel : ObservableObject
         {
             RemoteGridEntries.Add(entry);
         }
+
+        Log.Debug(
+            "Remote grid refreshed. SearchActive={SearchActive} Path={Path} RemoteEntries={RemoteEntriesCount} RemoteGridEntries={RemoteGridEntriesCount}",
+            IsRemoteSearchActive,
+            RemotePath,
+            RemoteEntries.Count,
+            RemoteGridEntries.Count);
     }
 
     private async Task<QueueBatchResult> ResolveAndEnqueueBatchAsync(IReadOnlyList<TransferRequest> requests, bool startImmediately)
