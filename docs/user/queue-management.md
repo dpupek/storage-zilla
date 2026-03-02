@@ -4,7 +4,7 @@ The queue is the control center for all transfer execution.
 
 ## Queue Columns
 - `Local`: local source or destination path
-- `Remote`: remote Azure Files path
+- `Remote`: remote Azure Storage path (file share or blob container)
 - `Direction`: `Upload` or `Download`
 - `Conflict`: effective policy used by the item
 - `Status`: `Queued`, `Running`, `Paused`, `Completed`, `Failed`, `Canceled`

@@ -2,14 +2,16 @@
 
 ![Storage Zilla Logo](img/storage-zilla-logo.png)
 
-Storage Zilla is a Windows desktop client for Azure File Shares with an FTP-style dual-pane experience.
+Storage Zilla is a Windows desktop client for Azure Storage with an FTP-style dual-pane experience.
 
 It is built for developers and operators who want fast local/remote browsing, queue-based transfers, and safe update-ready distribution.
 
 Core capabilities:
 - Interactive Azure sign-in
-- Subscription, storage account, and file share discovery
+- Subscription, storage account, and remote root discovery (Azure File Shares + Blob Containers)
 - Dual-pane local/remote browsing
+- Provider-inferred remote operations (Files and Blob work through the same UX)
+- Recursive remote search with scope selection, cancel, and incremental results
 - Queue-based upload/download with conflict policies
 - Operational safety checks and permission-aware UX
 - Signed MSIX release pipelines for beta/prod channels and in-app update checks

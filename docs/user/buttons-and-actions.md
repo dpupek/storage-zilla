@@ -7,7 +7,7 @@ This reference maps visible controls to their behavior.
 ### File
 - `Sign In`: interactive Azure login.
 - `Sign Out`: clears current authenticated session.
-- `Save Profile`: persists selected subscription/account/share, paths, and settings.
+- `Save Profile`: persists selected subscription/account/remote-root, paths, and settings.
 - `Exit`: closes app.
 
 ### Tools
@@ -23,10 +23,23 @@ This reference maps visible controls to their behavior.
   - Editable path input
   - Recent path history
 - `Browse`: pick local folder with system folder picker.
+- `Up one folder` (local): move to local parent folder.
+- `Create local folder`: create a child folder in current local path.
 - Remote path combo:
-  - Editable relative share path
+  - Editable relative remote path
   - Recent path history
 - `Refresh`: requery current remote directory.
+- `Up one folder` (remote): move to remote parent folder.
+- `Create remote folder`: create a child folder in current remote path.
+
+## Remote Search Controls
+- Search input (`Search remote...`): recursive remote search text.
+- Scope dropdown:
+  - `Current Path`
+  - `Share Root`
+- Search: starts recursive search.
+- Cancel search: cancels in-progress search.
+- Clear search: exits search mode and restores browse view.
 
 ## Transfer Buttons (center)
 - `>>` Upload selected local entry to remote target context.
@@ -37,6 +50,7 @@ This reference maps visible controls to their behavior.
 - Resume selected
 - Retry selected
 - Cancel selected
+- Clear completed/canceled
 - Pause all
 - Run queued jobs
 
@@ -55,9 +69,10 @@ Selected-item actions operate only on selected queue rows.
 ## Remote Grid Context Menu
 - Download selection (start now)
 - Download selection (add to queue)
+- Go to file location (for search results)
 - Rename
 - Delete
-- Column toggles: Name, Type, Size, Modified, Date Created, Author
+- Column toggles: Name, Type, Size, Path, Modified, Date Created, Author
 
 ## Status Signals
 - Right-side informational card: remote capability/permission guidance.

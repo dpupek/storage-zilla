@@ -6,13 +6,20 @@ Symptom:
 - Azure error includes `AuthorizationPermissionMismatch`
 
 Cause:
-- Identity lacks Azure Files data permissions on target scope.
+- Identity lacks required data permissions on target scope.
 
-Fix:
+Fix for Azure File Shares:
 1. Assign Azure Files data-plane role on storage account or share scope.
 2. Recommended roles:
    - `Storage File Data Privileged Reader`
    - `Storage File Data Privileged Contributor`
+3. Refresh remote pane after role propagation.
+
+Fix for Blob Containers:
+1. Assign Blob data-plane role on storage account or container scope.
+2. Recommended roles:
+   - `Storage Blob Data Reader`
+   - `Storage Blob Data Contributor`
 3. Refresh remote pane after role propagation.
 
 ## Access Denied for Local Folder
@@ -41,6 +48,9 @@ Checks:
 3. Use `Refresh` on remote path.
 4. Re-select the target path or parent `..` navigation.
 
+If a typed/selected remote path does not exist:
+- Storage Zilla warns and restores the previous valid path/grid view.
+
 ## Update Check Opens Release Page
 Current behavior:
 - `Check for Updates...` compares versions and offers to open the GitHub release page for the newer version.
@@ -50,3 +60,13 @@ Current behavior:
 - `%LocalAppData%\AzureFilesSync\logs\desktop-*.log`
 
 Use logs for detailed exception context when reporting issues.
+
+## Remote Search Appears Slow
+Notes:
+- Search is recursive and provider-aware (Files + Blob).
+- Results stream incrementally during scan; progress is shown in the remote pane status bar.
+
+Tips:
+1. Use `Current Path` scope when possible for faster results.
+2. Use cancel to stop a long scan and refine query/scope.
+3. Use `Go to file location` from search results to switch back to browse mode at that folder.

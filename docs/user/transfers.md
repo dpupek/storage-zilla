@@ -1,6 +1,6 @@
 # Transfers
 
-This page covers upload and download workflows, including conflict behavior.
+This page covers upload and download workflows across Azure File Shares and Blob Containers, including conflict behavior.
 
 ## Upload Workflow
 1. In the left grid, select one or more files.
@@ -21,9 +21,12 @@ This page covers upload and download workflows, including conflict behavior.
    - Remote context menu `Download Selection (Add to Queue)`
 3. Confirm queue status/progress and destination local path.
 
+You can download from normal browse results or from remote search results.
+
 ## Multi-Select Behavior
 - Multi-select in either grid creates one queue item per file.
 - Duplicate active transfers are blocked for the same direction/source/destination identity.
+- Remote folder selections are expanded recursively during queueing for both providers.
 
 ## Conflict Policies
 Each queued transfer carries an effective conflict policy:

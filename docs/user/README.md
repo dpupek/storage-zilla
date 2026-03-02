@@ -1,6 +1,6 @@
 # Storage Zilla User Guide
 
-Storage Zilla is a Windows desktop app for browsing and transferring Azure File Share content with an FTP-style dual-pane workflow.
+Storage Zilla is a Windows desktop app for browsing and transferring Azure Storage content (Azure File Shares and Blob Containers) with an FTP-style dual-pane workflow.
 
 Use this guide for setup, daily transfer workflows, and queue operations.
 
@@ -14,8 +14,9 @@ Use this guide for setup, daily transfer workflows, and queue operations.
 
 ## At a Glance
 - Interactive Azure sign-in
-- Subscription, storage account, and file share selection
+- Subscription, storage account, and remote root selection (`File Share` or `Blob Container`)
 - Side-by-side local and remote file browsing
+- Recursive remote search with scope controls and cancel support
 - Queue-based uploads and downloads
 - Conflict policies (`Ask`, `Skip`, `Overwrite`, `Rename`)
 - Queue controls for pause/resume/retry/cancel
