@@ -21,7 +21,7 @@ public sealed class RemoteCapabilityService : IRemoteCapabilityService
     {
         if (!context.IsValid)
         {
-            return RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and file share.");
+            return RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and remote root.");
         }
 
         var key = BuildKey(context);
@@ -47,13 +47,13 @@ public sealed class RemoteCapabilityService : IRemoteCapabilityService
 
         if (!context.IsValid)
         {
-            snapshot = RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and file share.");
+            snapshot = RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and remote root.");
         }
         else
         {
             try
             {
-                var sharePath = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
+                var sharePath = new SharePath(context.StorageAccountName, context.ShareName, context.Path, context.ProviderKind);
                 await _azureFilesBrowserService
                     .ListDirectoryPageAsync(sharePath, continuationToken: null, pageSize: 1, cancellationToken)
                     .ConfigureAwait(false);
@@ -86,5 +86,5 @@ public sealed class RemoteCapabilityService : IRemoteCapabilityService
     }
 
     private static string BuildKey(RemoteContext context) =>
-        $"{context.SubscriptionId ?? string.Empty}|{context.StorageAccountName}|{context.ShareName}|{context.Path}";
+        $"{context.SubscriptionId ?? string.Empty}|{context.StorageAccountName}|{context.ShareName}|{context.ProviderKind}|{context.Path}";
 }

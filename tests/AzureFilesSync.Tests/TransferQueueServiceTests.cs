@@ -208,6 +208,40 @@ public sealed class TransferQueueServiceTests
     }
 
     [Fact]
+    public void EnqueueOrGetExisting_SamePathsDifferentProvider_AddsDistinctJobs()
+    {
+        #region Arrange
+        var executor = new StubTransferExecutor();
+        var checkpoints = new InMemoryCheckpointStore();
+        var queue = new TransferQueueService(executor, checkpoints, workerCount: 1);
+        var filesRequest = new TransferRequest(
+            TransferDirection.Upload,
+            @"C:\tmp\file.txt",
+            new SharePath("acct", "root", "file.txt", RemoteProviderKind.AzureFiles));
+        var blobRequest = new TransferRequest(
+            TransferDirection.Upload,
+            @"C:\tmp\file.txt",
+            new SharePath("acct", "root", "file.txt", RemoteProviderKind.AzureBlob));
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(queue.Snapshot());
+        #endregion
+
+        #region Act
+        var first = queue.EnqueueOrGetExisting(filesRequest, startImmediately: false);
+        var second = queue.EnqueueOrGetExisting(blobRequest, startImmediately: false);
+        #endregion
+
+        #region Assert
+        Assert.True(first.AddedNew);
+        Assert.True(second.AddedNew);
+        Assert.NotEqual(first.JobId, second.JobId);
+        Assert.Equal(2, queue.Snapshot().Count);
+        #endregion
+    }
+
+    [Fact]
     public async Task EnqueueOrGetExisting_AfterCompleted_AllowsNewJob()
     {
         #region Arrange

@@ -15,7 +15,8 @@ public sealed record RemoteContext(
     string StorageAccountName,
     string ShareName,
     string Path,
-    string? SubscriptionId = null)
+    string? SubscriptionId = null,
+    RemoteProviderKind ProviderKind = RemoteProviderKind.AzureFiles)
 {
     public bool IsValid =>
         !string.IsNullOrWhiteSpace(StorageAccountName) &&

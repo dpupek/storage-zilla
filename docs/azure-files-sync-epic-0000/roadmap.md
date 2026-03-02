@@ -110,6 +110,17 @@
 - [x] Introduce remote operation coordinator with typed operations (`Browse`, `LoadMore`, `Search`, `SelectionChange`) and cancel-reason tracking for richer diagnostics.
 - [x] Harden command `CanExecute` notifications with dispatcher-safe updates to prevent cross-thread UI exceptions during asynchronous remote state transitions.
 
+## Phase 11: Multi-Provider Remote Roots (child-0010)
+- [x] Extend remote root discovery to include both Azure File Shares and Blob Containers in one selector.
+- [x] Infer remote provider from selected root kind (no provider dropdown) and propagate provider through `SharePath`/`RemoteContext`.
+- [x] Add provider-aware browse paging and metadata enrichment for Azure Blob container hierarchy.
+- [x] Add provider-aware remote operations (`create folder`, `rename`, `delete`) for Azure Blob roots.
+- [x] Add provider-aware transfer execution (upload/download) and conflict probing for Azure Blob roots.
+- [x] Preserve queue dedupe semantics by including provider kind in transfer identity keys.
+- [x] Update selector labeling/UX from `File Share` to `Remote Root` with kind-aware display names.
+- [x] Persist selected remote root kind in connection profile for deterministic profile restore.
+- [x] Add unit tests for provider mapping and queue dedupe-by-provider behavior.
+
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.

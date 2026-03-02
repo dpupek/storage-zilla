@@ -9,6 +9,8 @@
 ## Discovery
 - No subscriptions available.
 - User has ARM rights but no data-plane file share rights.
+- Storage account supports only blob endpoint (for example `BlockBlobStorage`) and has no files endpoint.
+- Storage account has mixed access where one provider endpoint is unavailable but the other is healthy.
 - Remote entry selection can race with async metadata enrichment.
 - Saved storage account/file share endpoint is no longer resolvable (DNS/network drift).
 
@@ -56,3 +58,6 @@
 - Centralize path parsing/formatting via `IPathDisplayFormatter` so root and separator behavior stays consistent across view model and UI bindings.
 - Route remote browse/search/load-more/selection loads through `IRemoteOperationCoordinator` to retain latest-only semantics plus explicit cancel reasons in logs.
 - Marshal command-state notifications (`NotifyCanExecuteChanged`) through the dispatcher to avoid thread-affinity faults when async operations complete on non-UI continuations.
+- Aggregate remote roots from both Azure Files and Azure Blob endpoints so blob-only accounts remain usable.
+- Infer provider from selected root kind and carry provider metadata in `SharePath`/`RemoteContext` so browse/operations/transfers route correctly without extra UI state.
+- Include provider kind in queue dedupe keys to avoid cross-provider false duplicates when relative paths match.

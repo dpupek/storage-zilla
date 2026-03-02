@@ -34,7 +34,7 @@ public partial class MainViewModel : ObservableObject
     private const int RemotePageSize = 500;
     private const string QueueFilterAll = "All";
     private const string RemoteSearchScopeCurrentPath = "Current Path";
-    private const string RemoteSearchScopeShareRoot = "Share Root";
+    private const string RemoteSearchScopeShareRoot = "Remote Root";
     private const int RemoteSearchMaxResults = 1000;
     private static readonly TimeSpan DefaultRemoteOpenDirectoryTimeout = TimeSpan.FromSeconds(20);
 
@@ -465,6 +465,105 @@ public partial class MainViewModel : ObservableObject
             });
     }
 
+    public async Task NavigateRemotePathFromInputAsync(string? requestedPathDisplay)
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            return;
+        }
+
+        ClearRemoteSearchState(clearQuery: false);
+        var requestedPath = NormalizeRemotePathDisplay(requestedPathDisplay);
+        var previousPath = RemotePath;
+        var candidatePaths = BuildRemotePathFallbackCandidates(requestedPath, previousPath);
+        string? successfulPath = null;
+        RemoteAccessState? requestedPathFailureState = null;
+        const int maxPathAttempts = 3;
+
+        var success = await ExecuteRemoteReadTaskAsync(
+            operationType: RemoteOperationType.Browse,
+            loadingMessage: "Loading remote directory...",
+            clearGridFirst: false,
+            showSpinnerAfterDelay: false,
+            errorMessage: "Failed to load remote directory.",
+            operation: async token =>
+            {
+                var attemptedPaths = new HashSet<string>(StringComparer.Ordinal);
+                var attemptCount = 0;
+
+                foreach (var candidatePath in candidatePaths)
+                {
+                    if (!attemptedPaths.Add(candidatePath))
+                    {
+                        continue;
+                    }
+
+                    attemptCount++;
+                    if (attemptCount > maxPathAttempts)
+                    {
+                        Log.Warning(
+                            "Remote path fallback aborted after max attempts. RequestedPath={RequestedPath} PreviousPath={PreviousPath} Account={Account} Root={Root}",
+                            requestedPath,
+                            previousPath,
+                            SelectedStorageAccount.Name,
+                            SelectedFileShare.Name);
+                        break;
+                    }
+
+                    token.ThrowIfCancellationRequested();
+                    RemotePath = candidatePath;
+
+                    Log.Debug(
+                        "Attempting remote path load candidate {Attempt}/{MaxAttempts}. CandidatePath={CandidatePath} RequestedPath={RequestedPath} PreviousPath={PreviousPath} Account={Account} Root={Root}",
+                        attemptCount,
+                        maxPathAttempts,
+                        candidatePath,
+                        requestedPath,
+                        previousPath,
+                        SelectedStorageAccount.Name,
+                        SelectedFileShare.Name);
+
+                    var loaded = await LoadRemoteDirectoryPageAsync(
+                        reset: true,
+                        token,
+                        showUnexpectedErrorDialog: false,
+                        allowRootFallback: false);
+                    if (loaded)
+                    {
+                        successfulPath = candidatePath;
+                        return true;
+                    }
+
+                    if (string.Equals(candidatePath, requestedPath, StringComparison.Ordinal))
+                    {
+                        requestedPathFailureState = RemoteCapability?.State;
+                    }
+                }
+
+                return false;
+            },
+            onFailureRollbackAsync: null);
+
+        if (success &&
+            !string.Equals(successfulPath, requestedPath, StringComparison.Ordinal) &&
+            requestedPathFailureState == RemoteAccessState.NotFound)
+        {
+            MessageBox.Show(
+                $"The path '{FormatRemotePathDisplay(requestedPath)}' was not found in remote root '{SelectedFileShare.Name}'. The view was restored to '{FormatRemotePathDisplay(successfulPath)}'.",
+                "Remote Path Not Found",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        else if (!success && requestedPathFailureState == RemoteAccessState.NotFound)
+        {
+            MessageBox.Show(
+                $"The path '{FormatRemotePathDisplay(requestedPath)}' was not found in remote root '{SelectedFileShare.Name}', and no fallback path could be opened.",
+                "Remote Path Not Found",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanLoadMoreRemoteEntries))]
     private async Task LoadMoreRemoteEntriesAsync()
     {
@@ -571,7 +670,7 @@ public partial class MainViewModel : ObservableObject
                 var lastProgressLogDirectories = -1;
                 await foreach (var progress in _remoteSearchService.SearchIncrementalAsync(
                                    new RemoteSearchRequest(
-                                       new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, startRelativePath),
+                                       BuildSelectedSharePath(startRelativePath),
                                        query,
                                        IncludeDirectories: true,
                                        MaxResults: RemoteSearchMaxResults),
@@ -932,6 +1031,33 @@ public partial class MainViewModel : ObservableObject
     private bool IsCurrentRemoteSearchRun(long searchRunVersion) =>
         Interlocked.Read(ref _remoteSearchRunVersion) == searchRunVersion;
 
+    private static RemoteCapabilitySnapshot BuildRemoteNotFoundSnapshot() =>
+        new(
+            RemoteAccessState.NotFound,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "The selected remote path or root was not found.",
+            DateTimeOffset.UtcNow,
+            ErrorCode: "ResourceNotFound",
+            HttpStatus: 404);
+
+    private SharePath BuildSelectedSharePath(string relativePath)
+    {
+        if (SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            throw new InvalidOperationException("A storage account and remote root must be selected.");
+        }
+
+        return new SharePath(
+            SelectedStorageAccount.Name,
+            SelectedFileShare.Name,
+            relativePath,
+            SelectedFileShare.ProviderKind);
+    }
+
     private async Task<bool> LoadRemoteDirectoryPageAsync(
         bool reset,
         CancellationToken cancellationToken,
@@ -941,7 +1067,7 @@ public partial class MainViewModel : ObservableObject
         if (SelectedStorageAccount is null || SelectedFileShare is null)
         {
             ClearRemoteEntriesAndPaging();
-            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and file share."));
+            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and remote root."));
             return false;
         }
 
@@ -981,10 +1107,44 @@ public partial class MainViewModel : ObservableObject
                 return false;
             }
 
-            var path = new SharePath(context.StorageAccountName, context.ShareName, context.Path);
+            var path = new SharePath(context.StorageAccountName, context.ShareName, context.Path, context.ProviderKind);
             var continuationToken = reset ? null : _remoteContinuationToken;
             var page = await _azureFilesBrowserService.ListDirectoryPageAsync(path, continuationToken, RemotePageSize, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (reset &&
+                context.ProviderKind == RemoteProviderKind.AzureBlob &&
+                string.IsNullOrWhiteSpace(continuationToken) &&
+                !string.IsNullOrWhiteSpace(context.Path) &&
+                page.Entries.Count == 0)
+            {
+                // Blob virtual folders can return an empty page for missing prefixes; verify directory existence explicitly.
+                var details = await _azureFilesBrowserService.GetEntryDetailsAsync(path, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (details is null || !details.IsDirectory)
+                {
+                    var notFound = BuildRemoteNotFoundSnapshot();
+                    ApplyCapability(notFound);
+                    if (await TryFallbackToRemoteRootOnNotFoundAsync(
+                            context,
+                            notFound,
+                            reset,
+                            showUnexpectedErrorDialog,
+                            allowRootFallback,
+                            cancellationToken))
+                    {
+                        return true;
+                    }
+
+                    ClearRemoteEntriesAndPaging();
+                    Log.Warning(
+                        "Remote blob path resolved to no directory. Treating as not found. Account={Account} Root={Root} Path={Path}",
+                        context.StorageAccountName,
+                        context.ShareName,
+                        context.Path);
+                    return false;
+                }
+            }
 
             if (reset)
             {
@@ -1332,7 +1492,7 @@ public partial class MainViewModel : ObservableObject
                 "New Folder");
             var relativePath = CombineRemotePath(RemotePath, folderName);
             await _remoteFileOperationsService.CreateDirectoryAsync(
-                new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, relativePath),
+                BuildSelectedSharePath(relativePath),
                 CancellationToken.None);
             await LoadRemoteDirectoryAsync();
         }
@@ -1377,7 +1537,7 @@ public partial class MainViewModel : ObservableObject
         var request = CreateTransferRequest(
             TransferDirection.Upload,
             SelectedLocalEntry.FullPath,
-            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+            BuildSelectedSharePath(remoteRelative),
             UploadConflictDefaultPolicy);
         var batch = await ResolveAndEnqueueBatchAsync([request], startImmediately: true);
         SetQueueBatchStatus(batch);
@@ -1502,7 +1662,7 @@ public partial class MainViewModel : ObservableObject
             IsRemoteSpinnerVisible = false;
             RemoteLoadingMessage = string.Empty;
             ClearRemoteDiagnostics();
-            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Sign in to browse Azure file shares."));
+            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Sign in to browse Azure storage roots."));
             _lastMirrorPlan = null;
             ExecuteMirrorCommand.NotifyCanExecuteChanged();
             Log.Information("User signed out.");
@@ -1648,7 +1808,7 @@ public partial class MainViewModel : ObservableObject
         var spec = new MirrorSpec(
             TransferDirection.Upload,
             LocalPath,
-            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, RemotePath),
+            BuildSelectedSharePath(RemotePath),
             IncludeDeletes);
 
         IsMirrorPlanning = true;
@@ -1745,7 +1905,7 @@ public partial class MainViewModel : ObservableObject
 
         StartSelectionChangeLoad(
             token => HandleStorageAccountSelectionChangedAsync(value, token),
-            "Failed to load file shares for selected storage account.");
+            "Failed to load remote roots for selected storage account.");
     }
 
     partial void OnSelectedFileShareChanged(FileShareItem? value)
@@ -1769,7 +1929,7 @@ public partial class MainViewModel : ObservableObject
                 token.ThrowIfCancellationRequested();
                 await PersistProfileAsync();
             },
-            "Failed to load remote directory for selected file share.");
+            "Failed to load remote directory for selected root.");
     }
 
     partial void OnSelectedLocalEntryChanged(LocalEntry? value)
@@ -1832,7 +1992,7 @@ public partial class MainViewModel : ObservableObject
         {
             FileShares.Clear();
             ClearRemoteEntriesAndPaging();
-            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and file share."));
+            ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Select a storage account and remote root."));
         }
 
         await PersistProfileAsync();
@@ -1840,10 +2000,13 @@ public partial class MainViewModel : ObservableObject
 
     private async Task HandleStorageAccountSelectionChangedAsync(StorageAccountItem value, CancellationToken cancellationToken)
     {
+        SetSelectionSilently(() => SelectedFileShare = null);
+        FileShares.Clear();
+        ClearRemoteEntriesAndPaging();
+        ClearRemoteDiagnostics();
+
         if (string.IsNullOrWhiteSpace(value.Name))
         {
-            FileShares.Clear();
-            ClearRemoteEntriesAndPaging();
             ClearRemoteSearchState(clearQuery: false);
             ApplyCapability(RemoteCapabilitySnapshot.InvalidSelection("Selected storage account is missing a valid name."));
             LoginStatus = "Signed in. Selected storage account is missing a valid name.";
@@ -1888,44 +2051,27 @@ public partial class MainViewModel : ObservableObject
 
     private async Task LoadFileSharesAsync(StorageAccountItem account, CancellationToken cancellationToken)
     {
-        Log.Debug("Loading file shares for storage account {StorageAccountName}", account.Name);
-        var endpointHost = BuildStorageFileEndpointHost(account.Name);
-        var preflight = await _storageEndpointPreflightService.ValidateAsync(endpointHost, cancellationToken);
-        if (!preflight.Success)
+        Log.Debug("Loading remote roots (shares/containers) for storage account {StorageAccountName}", account.Name);
+        var remoteRoots = new List<FileShareItem>();
+        var fileEndpoint = BuildStorageFileEndpointHost(account.Name);
+        var blobEndpoint = BuildStorageBlobEndpointHost(account.Name);
+        var includeFileShares = !IsBlobOnlyStorageAccountKind(account.Kind);
+        if (!includeFileShares)
         {
-            ClearRemoteEntriesAndPaging();
-            ClearRemoteSearchState(clearQuery: false);
-            var message =
-                $"Cannot resolve or reach '{endpointHost}'. " +
-                "Verify private DNS/VPN routing and allow outbound HTTPS (443) through antivirus, proxy, and firewall rules for Azure Files endpoints.";
-            ApplyCapability(new RemoteCapabilitySnapshot(
-                RemoteAccessState.TransientFailure,
-                false,
-                false,
-                false,
-                false,
-                false,
-                message,
-                DateTimeOffset.UtcNow));
-            LoginStatus = $"Signed in. Storage account '{account.Name}' is currently unreachable (DNS/network).";
-            SetRemoteDiagnostics(endpointHost, preflight.FailureSummary ?? "Endpoint preflight failed.");
-            Log.Warning(
-                "Storage endpoint preflight failed for {StorageAccountName}. Endpoint={EndpointHost}. Reason={Reason}",
+            Log.Debug(
+                "Storage account {StorageAccountName} detected as blob-only kind ({StorageKind}); skipping Azure Files root discovery.",
                 account.Name,
-                endpointHost,
-                preflight.FailureSummary);
-            return;
+                account.Kind);
         }
 
-        var fileShares = new List<FileShareItem>();
         try
         {
-            await foreach (var share in _azureDiscoveryService.ListFileSharesAsync(account.Name, cancellationToken))
+            await foreach (var share in _azureDiscoveryService.ListFileSharesAsync(account.Name, includeFileShares, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!string.IsNullOrWhiteSpace(share.Name))
                 {
-                    fileShares.Add(share);
+                    remoteRoots.Add(share);
                 }
             }
         }
@@ -1936,10 +2082,10 @@ public partial class MainViewModel : ObservableObject
             var requestFailed = TryFindRequestFailedException(ex);
             if (IsDnsResolutionFailure(ex))
             {
-                Log.Warning(ex, "Cannot resolve Azure Files endpoint for storage account {StorageAccountName}", account.Name);
+                Log.Warning(ex, "Cannot resolve Azure endpoints for storage account {StorageAccountName}", account.Name);
                 var message =
-                    $"Cannot resolve or reach '{endpointHost}'. " +
-                    "Verify private DNS/VPN routing and allow outbound HTTPS (443) through antivirus, proxy, and firewall rules for Azure Files endpoints.";
+                    $"Cannot resolve or reach remote endpoints for '{account.Name}'. " +
+                    "Verify private DNS/VPN routing and allow outbound HTTPS (443) through antivirus, proxy, and firewall rules for '*.file.core.windows.net' and '*.blob.core.windows.net'.";
                 ApplyCapability(new RemoteCapabilitySnapshot(
                     RemoteAccessState.TransientFailure,
                     false,
@@ -1952,7 +2098,7 @@ public partial class MainViewModel : ObservableObject
                     requestFailed?.ErrorCode,
                     requestFailed?.Status > 0 ? requestFailed.Status : null));
                 LoginStatus = $"Signed in. Storage account '{account.Name}' is currently unreachable (DNS/network).";
-                SetRemoteDiagnostics(endpointHost, "DNS resolution failed while listing shares.", ex, requestFailed);
+                SetRemoteDiagnostics($"{fileEndpoint} | {blobEndpoint}", "DNS resolution failed while listing remote roots.", ex, requestFailed);
                 return;
             }
 
@@ -1966,18 +2112,18 @@ public partial class MainViewModel : ObservableObject
                         false,
                         false,
                         false,
-                        $"Cannot list shares for '{account.Name}' (HTTP {requestFailed.Status}).",
+                        $"Cannot list remote roots for '{account.Name}' (HTTP {requestFailed.Status}).",
                         DateTimeOffset.UtcNow,
                         requestFailed.ErrorCode,
                         requestFailed.Status);
-                ApplyCapability(capability with { UserMessage = $"Cannot list shares for '{account.Name}' (HTTP {requestFailed.Status}). Verify Azure Files data access." });
-                LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' ({requestFailed.Status}).";
-                Log.Warning(ex, "Cannot list shares for storage account {StorageAccountName} due to Azure request failure.", account.Name);
-                SetRemoteDiagnostics(endpointHost, $"HTTP {requestFailed.Status} while listing shares.", ex, requestFailed);
+                ApplyCapability(capability with { UserMessage = $"Cannot list remote roots for '{account.Name}' (HTTP {requestFailed.Status}). Verify Azure Files/Blob data access." });
+                LoginStatus = $"Signed in. Cannot list remote roots for '{account.Name}' ({requestFailed.Status}).";
+                Log.Warning(ex, "Cannot list remote roots for storage account {StorageAccountName} due to Azure request failure.", account.Name);
+                SetRemoteDiagnostics($"{fileEndpoint} | {blobEndpoint}", $"HTTP {requestFailed.Status} while listing remote roots.", ex, requestFailed);
                 return;
             }
 
-            Log.Warning(ex, "Cannot list shares for storage account {StorageAccountName} due to unexpected error.", account.Name);
+            Log.Warning(ex, "Cannot list remote roots for storage account {StorageAccountName} due to unexpected error.", account.Name);
             ApplyCapability(new RemoteCapabilitySnapshot(
                 RemoteAccessState.TransientFailure,
                 false,
@@ -1985,22 +2131,24 @@ public partial class MainViewModel : ObservableObject
                 false,
                 false,
                 false,
-                $"Cannot list shares for '{account.Name}'. Check connectivity and try Refresh.",
+                $"Cannot list remote roots for '{account.Name}'. Check connectivity and try Refresh.",
                 DateTimeOffset.UtcNow));
-            LoginStatus = $"Signed in. Cannot list shares for '{account.Name}' due to a connectivity error.";
-            SetRemoteDiagnostics(endpointHost, "Unexpected error while listing shares.", ex);
+            LoginStatus = $"Signed in. Cannot list remote roots for '{account.Name}' due to a connectivity error.";
+            SetRemoteDiagnostics($"{fileEndpoint} | {blobEndpoint}", "Unexpected error while listing remote roots.", ex);
             return;
         }
 
-        ReplaceSortedCollection(FileShares, fileShares, x => x.Name);
+        ReplaceSortedCollection(FileShares, remoteRoots, x => $"{x.Name}|{x.Kind}");
         ClearRemoteDiagnostics();
 
-        if (SelectedFileShare is null || FileShares.All(x => x.Name != SelectedFileShare.Name))
+        if (SelectedFileShare is null || FileShares.All(x => x.Name != SelectedFileShare.Name || x.Kind != SelectedFileShare.Kind))
         {
             SetSelectionSilently(() => SelectedFileShare = FileShares.FirstOrDefault());
         }
 
-        Log.Debug("Loaded {ShareCount} file shares for {StorageAccountName}", FileShares.Count, account.Name);
+        var shareCount = FileShares.Count(x => x.Kind == RemoteRootKind.FileShare);
+        var containerCount = FileShares.Count(x => x.Kind == RemoteRootKind.BlobContainer);
+        Log.Debug("Loaded {ShareCount} file shares and {ContainerCount} blob containers for {StorageAccountName}", shareCount, containerCount, account.Name);
 
         cancellationToken.ThrowIfCancellationRequested();
         await LoadRemoteDirectoryPageAsync(reset: true, cancellationToken);
@@ -2060,6 +2208,20 @@ public partial class MainViewModel : ObservableObject
 
     private static string BuildStorageFileEndpointHost(string storageAccountName) =>
         $"{storageAccountName}.file.core.windows.net";
+
+    private static string BuildStorageBlobEndpointHost(string storageAccountName) =>
+        $"{storageAccountName}.blob.core.windows.net";
+
+    private static bool IsBlobOnlyStorageAccountKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+        {
+            return false;
+        }
+
+        return string.Equals(kind, "BlobStorage", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(kind, "BlockBlobStorage", StringComparison.OrdinalIgnoreCase);
+    }
 
     private void SetRemoteDiagnostics(string endpointHost, string summary, Exception? ex = null, RequestFailedException? requestFailed = null)
     {
@@ -2151,7 +2313,18 @@ public partial class MainViewModel : ObservableObject
             SelectedStorageAccount = account;
             await LoadFileSharesAsync(account, CancellationToken.None);
 
-            var share = FileShares.FirstOrDefault(x => string.Equals(x.Name, profile.FileShareName, StringComparison.OrdinalIgnoreCase));
+            var namedRoots = FileShares
+                .Where(x => string.Equals(x.Name, profile.FileShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            FileShareItem? share = null;
+            if (namedRoots.Count > 0)
+            {
+                var preferredKind = profile.RemoteRootKind ?? RemoteRootKind.FileShare;
+                // Legacy profiles did not persist RemoteRootKind, and were Azure Files-only.
+                share = namedRoots.FirstOrDefault(x => x.Kind == preferredKind)
+                    ?? namedRoots.FirstOrDefault();
+            }
+
             if (share is not null)
             {
                 SelectedFileShare = share;
@@ -2187,7 +2360,8 @@ public partial class MainViewModel : ObservableObject
             RecentRemotePaths.ToList(),
             LocalGridLayout,
             RemoteGridLayout,
-            UpdateChannel);
+            UpdateChannel,
+            SelectedFileShare?.Kind);
 
         await _connectionProfileStore.SaveAsync(profile, CancellationToken.None);
     }
@@ -2223,7 +2397,7 @@ public partial class MainViewModel : ObservableObject
                     requests.Add(CreateTransferRequest(
                         TransferDirection.Upload,
                         filePath,
-                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+                        BuildSelectedSharePath(remoteRelative),
                         UploadConflictDefaultPolicy));
                 }
             }
@@ -2233,7 +2407,7 @@ public partial class MainViewModel : ObservableObject
                 requests.Add(CreateTransferRequest(
                     TransferDirection.Upload,
                     entry.FullPath,
-                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, remoteRelative),
+                    BuildSelectedSharePath(remoteRelative),
                     UploadConflictDefaultPolicy));
             }
         }
@@ -2277,7 +2451,7 @@ public partial class MainViewModel : ObservableObject
                     requests.Add(CreateTransferRequest(
                         TransferDirection.Download,
                         localTarget,
-                        new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, file.FullPath),
+                        BuildSelectedSharePath(file.FullPath),
                         DownloadConflictDefaultPolicy));
                 }
             }
@@ -2287,7 +2461,7 @@ public partial class MainViewModel : ObservableObject
                 requests.Add(CreateTransferRequest(
                     TransferDirection.Download,
                     localTarget,
-                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
+                    BuildSelectedSharePath(entry.FullPath),
                     DownloadConflictDefaultPolicy));
             }
         }
@@ -2399,7 +2573,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         await _remoteFileOperationsService.RenameAsync(
-            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
+            BuildSelectedSharePath(entry.FullPath),
             newName.Trim(),
             CancellationToken.None);
         await LoadRemoteDirectoryAsync();
@@ -2413,7 +2587,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         await _remoteFileOperationsService.DeleteAsync(
-            new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
+            BuildSelectedSharePath(entry.FullPath),
             recursive,
             CancellationToken.None);
         await LoadRemoteDirectoryAsync();
@@ -2449,7 +2623,7 @@ public partial class MainViewModel : ObservableObject
             try
             {
                 await _remoteFileOperationsService.DeleteAsync(
-                    new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, target.FullPath),
+                    BuildSelectedSharePath(target.FullPath),
                     recursive,
                     CancellationToken.None);
                 deleted++;
@@ -2741,7 +2915,8 @@ public partial class MainViewModel : ObservableObject
             SelectedStorageAccount?.Name ?? string.Empty,
             SelectedFileShare?.Name ?? string.Empty,
             RemotePath,
-            SelectedSubscription?.Id);
+            SelectedSubscription?.Id,
+            SelectedFileShare?.ProviderKind ?? RemoteProviderKind.AzureFiles);
 
     private RemoteActionPolicy BuildRemotePolicy()
     {
@@ -2763,6 +2938,24 @@ public partial class MainViewModel : ObservableObject
     private string NormalizeRemotePathDisplay(string? value) => _pathDisplayFormatter.NormalizeRemotePathDisplay(value);
 
     private string FormatRemotePathDisplay(string? path) => _pathDisplayFormatter.FormatRemotePathDisplay(path);
+
+    private static IReadOnlyList<string> BuildRemotePathFallbackCandidates(string requestedPath, string previousPath)
+    {
+        var candidates = new List<string>(3) { requestedPath };
+
+        if (!string.Equals(previousPath, requestedPath, StringComparison.Ordinal))
+        {
+            candidates.Add(previousPath);
+        }
+
+        if (!string.Equals(string.Empty, requestedPath, StringComparison.Ordinal) &&
+            !string.Equals(string.Empty, previousPath, StringComparison.Ordinal))
+        {
+            candidates.Add(string.Empty);
+        }
+
+        return candidates;
+    }
 
     private void OnRecentRemotePathsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -3092,7 +3285,7 @@ public partial class MainViewModel : ObservableObject
             return results;
         }
 
-        var path = new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, directoryRelativePath);
+        var path = BuildSelectedSharePath(directoryRelativePath);
         var children = await _azureFilesBrowserService.ListDirectoryAsync(path, cancellationToken);
         foreach (var child in children)
         {
@@ -3164,7 +3357,7 @@ public partial class MainViewModel : ObservableObject
             var wasSelected = string.Equals(SelectedRemoteEntry?.FullPath, entry.FullPath, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(SelectedRemoteEntry?.Name, entry.Name, StringComparison.Ordinal);
             var details = await _azureFilesBrowserService.GetEntryDetailsAsync(
-                new SharePath(SelectedStorageAccount.Name, SelectedFileShare.Name, entry.FullPath),
+                BuildSelectedSharePath(entry.FullPath),
                 CancellationToken.None);
             if (details is null)
             {

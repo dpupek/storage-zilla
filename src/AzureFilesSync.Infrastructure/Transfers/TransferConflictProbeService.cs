@@ -1,3 +1,4 @@
+using Azure.Storage.Blobs;
 using Azure.Storage.Files.Shares;
 using Azure.Storage.Files.Shares.Models;
 using AzureFilesSync.Core.Contracts;
@@ -84,7 +85,7 @@ public sealed class TransferConflictProbeService : ITransferConflictProbeService
             var candidateRelative = string.IsNullOrWhiteSpace(directoryPart)
                 ? candidateName
                 : $"{directoryPart}/{candidateName}";
-            var candidatePath = new SharePath(remotePath.StorageAccountName, remotePath.ShareName, candidateRelative);
+            var candidatePath = new SharePath(remotePath.StorageAccountName, remotePath.ShareName, candidateRelative, remotePath.ProviderKind);
             if (!await RemoteFileExistsAsync(candidatePath, cancellationToken).ConfigureAwait(false))
             {
                 return candidatePath;
@@ -96,6 +97,12 @@ public sealed class TransferConflictProbeService : ITransferConflictProbeService
 
     private async Task<bool> RemoteFileExistsAsync(SharePath path, CancellationToken cancellationToken)
     {
+        if (path.ProviderKind == RemoteProviderKind.AzureBlob)
+        {
+            var blobClient = GetRemoteBlobClient(path);
+            return await blobClient.ExistsAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var fileClient = GetRemoteFileClient(path);
         return await fileClient.ExistsAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -126,5 +133,21 @@ public sealed class TransferConflictProbeService : ITransferConflictProbeService
         }
 
         return directoryClient.GetFileClient(fileName);
+    }
+
+    private BlobClient GetRemoteBlobClient(SharePath path)
+    {
+        var serviceClient = new BlobServiceClient(
+            new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
+            _authenticationService.GetCredential());
+
+        var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
+        var normalized = path.NormalizeRelativePath();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new InvalidOperationException("Remote file path is missing a file name.");
+        }
+
+        return containerClient.GetBlobClient(normalized);
     }
 }

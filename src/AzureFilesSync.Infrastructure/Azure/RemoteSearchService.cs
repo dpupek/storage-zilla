@@ -91,7 +91,8 @@ public sealed class RemoteSearchService : IRemoteSearchService
                     var pagePath = new SharePath(
                         request.StartPath.StorageAccountName,
                         request.StartPath.ShareName,
-                        currentRelativePath);
+                        currentRelativePath,
+                        request.StartPath.ProviderKind);
                     var pageTimer = Stopwatch.StartNew();
                     var pageTask = _browserService.ListDirectoryPageAsync(
                         pagePath,

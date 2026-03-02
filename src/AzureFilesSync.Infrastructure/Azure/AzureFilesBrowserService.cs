@@ -1,3 +1,5 @@
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Azure.Storage.Files.Shares;
 using Azure.Storage.Files.Shares.Models;
 using AzureFilesSync.Core.Contracts;
@@ -37,6 +39,24 @@ public sealed class AzureFilesBrowserService : IAzureFilesBrowserService
         int pageSize,
         CancellationToken cancellationToken)
     {
+        return path.ProviderKind == RemoteProviderKind.AzureBlob
+            ? await ListBlobDirectoryPageAsync(path, continuationToken, pageSize, cancellationToken).ConfigureAwait(false)
+            : await ListFileShareDirectoryPageAsync(path, continuationToken, pageSize, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        return path.ProviderKind == RemoteProviderKind.AzureBlob
+            ? await GetBlobEntryDetailsAsync(path, cancellationToken).ConfigureAwait(false)
+            : await GetFileShareEntryDetailsAsync(path, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RemoteDirectoryPage> ListFileShareDirectoryPageAsync(
+        SharePath path,
+        string? continuationToken,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
         var serviceClient = new ShareServiceClient(
             new Uri($"https://{path.StorageAccountName}.file.core.windows.net"),
             _authenticationService.GetCredential(),
@@ -67,7 +87,68 @@ public sealed class AzureFilesBrowserService : IAzureFilesBrowserService
         return new RemoteDirectoryPage([], null, false);
     }
 
-    public async Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken)
+    private async Task<RemoteDirectoryPage> ListBlobDirectoryPageAsync(
+        SharePath path,
+        string? continuationToken,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var serviceClient = new BlobServiceClient(
+            new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
+            _authenticationService.GetCredential());
+        var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
+        var prefix = BlobHierarchyPaths.NormalizePrefix(path.NormalizeRelativePath());
+
+        await foreach (Page<BlobHierarchyItem> page in containerClient
+                           .GetBlobsByHierarchyAsync(delimiter: "/", prefix: prefix, cancellationToken: cancellationToken)
+                           .AsPages(continuationToken, Math.Max(1, pageSize)))
+        {
+            var entries = new List<RemoteEntry>(page.Values.Count);
+            foreach (var item in page.Values)
+            {
+                if (item.IsPrefix)
+                {
+                    var directoryPath = (item.Prefix ?? string.Empty).TrimEnd('/');
+                    if (string.IsNullOrWhiteSpace(directoryPath))
+                    {
+                        continue;
+                    }
+
+                    entries.Add(new RemoteEntry(
+                        BlobHierarchyPaths.GetLeafName(directoryPath),
+                        directoryPath,
+                        true,
+                        0,
+                        null));
+                    continue;
+                }
+
+                var blob = item.Blob;
+                if (blob is null || BlobHierarchyPaths.IsDirectoryMarkerBlob(blob.Name))
+                {
+                    continue;
+                }
+
+                var fullPath = blob.Name.Replace('\\', '/').Trim('/');
+                entries.Add(new RemoteEntry(
+                    BlobHierarchyPaths.GetLeafName(fullPath),
+                    fullPath,
+                    false,
+                    blob.Properties.ContentLength ?? 0,
+                    blob.Properties.LastModified,
+                    TryGetDateTimeOffset(blob.Properties, "CreatedOn")));
+            }
+
+            return new RemoteDirectoryPage(
+                entries,
+                page.ContinuationToken,
+                !string.IsNullOrWhiteSpace(page.ContinuationToken));
+        }
+
+        return new RemoteDirectoryPage([], null, false);
+    }
+
+    private async Task<RemoteEntry?> GetFileShareEntryDetailsAsync(SharePath path, CancellationToken cancellationToken)
     {
         var serviceClient = new ShareServiceClient(
             new Uri($"https://{path.StorageAccountName}.file.core.windows.net"),
@@ -120,6 +201,49 @@ public sealed class AzureFilesBrowserService : IAzureFilesBrowserService
                 TryGetDateTimeOffset(fileProps.Value, "CreatedOn", "FileCreatedOn"),
                 TryGetString(fileProps.Value, "FilePermissionKey"));
         }
+    }
+
+    private async Task<RemoteEntry?> GetBlobEntryDetailsAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        var normalized = path.NormalizeRelativePath();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var serviceClient = new BlobServiceClient(
+            new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
+            _authenticationService.GetCredential());
+        var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
+        var blobClient = containerClient.GetBlobClient(normalized);
+
+        if (await blobClient.ExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var properties = await blobClient.GetPropertiesAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            return new RemoteEntry(
+                BlobHierarchyPaths.GetLeafName(normalized),
+                normalized,
+                false,
+                properties.Value.ContentLength,
+                properties.Value.LastModified,
+                TryGetDateTimeOffset(properties.Value, "CreatedOn"));
+        }
+
+        var prefix = BlobHierarchyPaths.NormalizePrefix(normalized);
+        await foreach (var page in containerClient.GetBlobsByHierarchyAsync(delimiter: "/", prefix: prefix, cancellationToken: cancellationToken).AsPages(default, 1))
+        {
+            if (page.Values.Any())
+            {
+                return new RemoteEntry(
+                    BlobHierarchyPaths.GetLeafName(normalized),
+                    normalized,
+                    true,
+                    0,
+                    null);
+            }
+        }
+
+        return null;
     }
 
     private static DateTimeOffset? TryGetDateTimeOffset(object source, params string[] propertyNames)

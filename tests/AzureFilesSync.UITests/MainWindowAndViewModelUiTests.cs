@@ -1171,6 +1171,70 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_LoadRemoteDirectory_BlobMissingVirtualPath_FallsBackToRoot()
+    {
+        #region Arrange
+        var browser = new StubAzureBrowserService
+        {
+            ListDirectoryPageBehavior = (path, _, _) =>
+            {
+                var normalized = path.NormalizeRelativePath();
+                return string.IsNullOrWhiteSpace(normalized)
+                    ? new RemoteDirectoryPage(
+                        [new RemoteEntry("root-blob.txt", "root-blob.txt", false, 10, DateTimeOffset.UtcNow)],
+                        null,
+                        false)
+                    : new RemoteDirectoryPage([], null, false);
+            },
+            GetEntryDetailsAsyncBehavior = (path, _) =>
+            {
+                var normalized = path.NormalizeRelativePath();
+                return Task.FromResult<RemoteEntry?>(
+                    string.Equals(normalized, "courseware", StringComparison.Ordinal)
+                        ? null
+                        : new RemoteEntry("entry", normalized, true, 0, DateTimeOffset.UtcNow));
+            }
+        };
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            browser,
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            new SpyTransferQueueService(),
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        viewModel.SelectedSubscription = new SubscriptionItem("sub", "Subscription");
+        viewModel.SelectedStorageAccount = new StorageAccountItem("sub", "storage", "rg");
+        viewModel.SelectedFileShare = new FileShareItem("container", RemoteRootKind.BlobContainer);
+        viewModel.RemotePath = "courseware";
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(RemoteProviderKind.AzureBlob, viewModel.SelectedFileShare.ProviderKind);
+        Assert.Equal("courseware", viewModel.RemotePath);
+        #endregion
+
+        #region Act
+        await viewModel.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal(string.Empty, viewModel.RemotePath);
+        Assert.Single(viewModel.RemoteEntries);
+        Assert.Equal("root-blob.txt", viewModel.RemoteEntries[0].Name);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_CreateLocalFolder_WhenNewFolderExists_UsesIncrementedName()
     {
         #region Arrange
@@ -1566,6 +1630,64 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_SignIn_LegacyProfileWithoutRootKind_PrefersFileShareWhenNamesOverlap()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var defaultLocalPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var profileStore = new ReadOnlyConnectionProfileStore(
+            new ConnectionProfile(
+                SubscriptionId: "sub",
+                StorageAccountName: "storage",
+                FileShareName: "shared-root",
+                LocalPath: defaultLocalPath,
+                RemotePath: string.Empty,
+                IncludeDeletes: false,
+                TransferMaxConcurrency: 4,
+                TransferMaxBytesPerSecond: 0,
+                UploadConflictDefaultPolicy: TransferConflictPolicy.Ask,
+                DownloadConflictDefaultPolicy: TransferConflictPolicy.Ask,
+                RecentLocalPaths: [defaultLocalPath],
+                RecentRemotePaths: [],
+                LocalGridLayout: null,
+                RemoteGridLayout: null,
+                UpdateChannel: UpdateChannel.Stable,
+                RemoteRootKind: null));
+
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new OverlappingRootDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            profileStore,
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        Assert.Null(viewModel.SelectedFileShare);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        var selected = Assert.IsType<FileShareItem>(viewModel.SelectedFileShare);
+        Assert.Equal("shared-root", selected.Name);
+        Assert.Equal(RemoteRootKind.FileShare, selected.Kind);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_SignIn_WhenShareEndpointDnsFails_KeepsSignedInAndShowsFriendlyRemoteMessage()
     {
         #region Arrange
@@ -1773,10 +1895,13 @@ public sealed class MainWindowAndViewModelUiTests
             yield return new StorageAccountItem(subscriptionId, "storage", "rg");
         }
 
-        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {
             await Task.CompletedTask;
-            yield return new FileShareItem("share");
+            if (includeFileShares)
+            {
+                yield return new FileShareItem("share");
+            }
         }
     }
 
@@ -1804,12 +1929,41 @@ public sealed class MainWindowAndViewModelUiTests
             yield return new StorageAccountItem(subscriptionId, "maccount", "rg-m");
         }
 
-        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {
             await Task.CompletedTask;
-            yield return new FileShareItem("zshare");
-            yield return new FileShareItem("ashare");
-            yield return new FileShareItem("mshare");
+            if (includeFileShares)
+            {
+                yield return new FileShareItem("zshare");
+                yield return new FileShareItem("ashare");
+                yield return new FileShareItem("mshare");
+            }
+        }
+    }
+
+    private sealed class OverlappingRootDiscoveryService : IAzureDiscoveryService
+    {
+        public async IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new SubscriptionItem("sub", "Subscription");
+        }
+
+        public async IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new StorageAccountItem(subscriptionId, "storage", "rg");
+        }
+
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            if (includeFileShares)
+            {
+                yield return new FileShareItem("shared-root", RemoteRootKind.FileShare);
+            }
+
+            yield return new FileShareItem("shared-root", RemoteRootKind.BlobContainer);
         }
     }
 
@@ -1827,12 +1981,17 @@ public sealed class MainWindowAndViewModelUiTests
             yield return new StorageAccountItem(subscriptionId, "nexportstudiostorage", "rg");
         }
 
-        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {
             await Task.CompletedTask;
-            var socket = new SocketException((int)SocketError.HostNotFound);
-            var http = new HttpRequestException("No such host is known.", socket);
-            throw new AggregateException(http);
+            if (includeFileShares)
+            {
+                var socket = new SocketException((int)SocketError.HostNotFound);
+                var http = new HttpRequestException("No such host is known.", socket);
+                throw new AggregateException(http);
+            }
+
+            yield return new FileShareItem("container-a", RemoteRootKind.BlobContainer);
 #pragma warning disable CS0162
             yield break;
 #pragma warning restore CS0162
@@ -1854,6 +2013,8 @@ public sealed class MainWindowAndViewModelUiTests
         public Func<SharePath, string?, int, RemoteDirectoryPage> ListDirectoryPageBehavior { get; set; } =
             (_, _, _) => new RemoteDirectoryPage([], null, false);
         public Func<SharePath, string?, int, CancellationToken, Task<RemoteDirectoryPage>>? ListDirectoryPageAsyncBehavior { get; set; }
+        public Func<SharePath, CancellationToken, Task<RemoteEntry?>> GetEntryDetailsAsyncBehavior { get; set; } =
+            (_, _) => Task.FromResult<RemoteEntry?>(null);
 
         public Task<IReadOnlyList<RemoteEntry>> ListDirectoryAsync(SharePath path, CancellationToken cancellationToken) =>
             Task.FromResult(ListDirectoryBehavior(path));
@@ -1864,7 +2025,7 @@ public sealed class MainWindowAndViewModelUiTests
                 : Task.FromResult(ListDirectoryPageBehavior(path, continuationToken, pageSize));
 
         public Task<RemoteEntry?> GetEntryDetailsAsync(SharePath path, CancellationToken cancellationToken) =>
-            Task.FromResult<RemoteEntry?>(null);
+            GetEntryDetailsAsyncBehavior(path, cancellationToken);
     }
 
     private sealed class StubRemoteSearchService : IRemoteSearchService
@@ -2084,7 +2245,12 @@ public sealed class MainWindowAndViewModelUiTests
 
     private sealed class InMemoryConnectionProfileStore : IConnectionProfileStore
     {
-        private ConnectionProfile _profile = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        private ConnectionProfile _profile;
+
+        public InMemoryConnectionProfileStore(ConnectionProfile? initialProfile = null)
+        {
+            _profile = initialProfile ?? ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        }
 
         public Task<ConnectionProfile> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(_profile);
 
@@ -2093,6 +2259,20 @@ public sealed class MainWindowAndViewModelUiTests
             _profile = profile;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ReadOnlyConnectionProfileStore : IConnectionProfileStore
+    {
+        private readonly ConnectionProfile _profile;
+
+        public ReadOnlyConnectionProfileStore(ConnectionProfile profile)
+        {
+            _profile = profile;
+        }
+
+        public Task<ConnectionProfile> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(_profile);
+
+        public Task SaveAsync(ConnectionProfile profile, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class StubRemoteCapabilityService : IRemoteCapabilityService

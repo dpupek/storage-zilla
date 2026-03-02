@@ -44,8 +44,14 @@ public sealed record RemoteSearchProgress(
     int ScannedEntries,
     IReadOnlyList<RemoteEntry>? SnapshotMatches = null);
 
-public sealed record SharePath(string StorageAccountName, string ShareName, string RelativePath)
+public sealed record SharePath(
+    string StorageAccountName,
+    string ShareName,
+    string RelativePath,
+    RemoteProviderKind ProviderKind = RemoteProviderKind.AzureFiles)
 {
+    public string RootName => ShareName;
+
     public string NormalizeRelativePath()
     {
         var trimmed = RelativePath.Replace('\\', '/').Trim('/');

@@ -2,6 +2,9 @@ using System.Security.Cryptography;
 using System.Diagnostics;
 using Microsoft.Win32.SafeHandles;
 using Azure;
+using Azure.Storage;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Azure.Storage.Files.Shares;
 using Azure.Storage.Files.Shares.Models;
 using AzureFilesSync.Core.Contracts;
@@ -33,6 +36,11 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             return Task.FromResult(new FileInfo(request.LocalPath).Length);
         }
 
+        if (request.RemotePath.ProviderKind == RemoteProviderKind.AzureBlob)
+        {
+            return GetRemoteBlobLengthAsync(request, cancellationToken);
+        }
+
         return GetRemoteLengthAsync(request, cancellationToken);
     }
 
@@ -43,6 +51,12 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
+        if (request.RemotePath.ProviderKind == RemoteProviderKind.AzureBlob)
+        {
+            await ExecuteBlobTransferAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (request.Direction == TransferDirection.Upload)
         {
             await UploadAsync(jobId, request, checkpoint, progress, cancellationToken).ConfigureAwait(false);
@@ -50,6 +64,109 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         else
         {
             await DownloadAsync(jobId, request, checkpoint, progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ExecuteBlobTransferAsync(
+        Guid jobId,
+        TransferRequest request,
+        Action<TransferProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        if (request.Direction == TransferDirection.Upload)
+        {
+            await UploadBlobAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await DownloadBlobAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task UploadBlobAsync(
+        Guid jobId,
+        TransferRequest request,
+        Action<TransferProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(request.LocalPath);
+        var totalBytes = fileInfo.Length;
+        var blobClient = await GetRemoteBlobClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
+        if (request.ConflictPolicy == TransferConflictPolicy.Ask &&
+            await blobClient.ExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(UnresolvedAskConflictMessage);
+        }
+
+        var uploadOptions = new BlobUploadOptions
+        {
+            TransferOptions = new StorageTransferOptions
+            {
+                InitialTransferSize = ResolveChunkSize(request),
+                MaximumTransferSize = ResolveChunkSize(request),
+                MaximumConcurrency = ResolveConcurrency(request)
+            },
+            ProgressHandler = new Progress<long>(bytes => progress(new TransferProgress(bytes, totalBytes)))
+        };
+
+        await ExecuteWithRetryAsync(
+            () => blobClient.UploadAsync(request.LocalPath, uploadOptions, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        progress(new TransferProgress(totalBytes, totalBytes));
+        await _checkpointStore.SaveAsync(
+            new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, totalBytes, DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DownloadBlobAsync(
+        Guid jobId,
+        TransferRequest request,
+        Action<TransferProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        var blobClient = await GetRemoteBlobClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
+        var properties = await ExecuteWithRetryAsync(
+            () => blobClient.GetPropertiesAsync(cancellationToken: cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        var totalBytes = properties.Value.ContentLength;
+
+        var directory = Path.GetDirectoryName(request.LocalPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        if (request.ConflictPolicy == TransferConflictPolicy.Ask && File.Exists(request.LocalPath))
+        {
+            throw new InvalidOperationException(UnresolvedAskConflictMessage);
+        }
+
+        var downloadOptions = new BlobDownloadToOptions
+        {
+            TransferOptions = new StorageTransferOptions
+            {
+                InitialTransferSize = ResolveChunkSize(request),
+                MaximumTransferSize = ResolveChunkSize(request),
+                MaximumConcurrency = ResolveConcurrency(request)
+            },
+            ProgressHandler = new Progress<long>(bytes => progress(new TransferProgress(bytes, totalBytes)))
+        };
+
+        await ExecuteWithRetryAsync(
+            () => blobClient.DownloadToAsync(request.LocalPath, downloadOptions, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        progress(new TransferProgress(totalBytes, totalBytes));
+        await _checkpointStore.SaveAsync(
+            new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, totalBytes, DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
+
+        if (properties.Value.ContentHash is { Length: > 0 } remoteHash)
+        {
+            var localHash = ComputeMd5(request.LocalPath);
+            if (!localHash.SequenceEqual(remoteHash))
+            {
+                throw new InvalidOperationException("Downloaded file hash does not match remote content hash.");
+            }
         }
     }
 
@@ -337,6 +454,13 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         return props.Value.ContentLength;
     }
 
+    private async Task<long> GetRemoteBlobLengthAsync(TransferRequest request, CancellationToken cancellationToken)
+    {
+        var blobClient = await GetRemoteBlobClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
+        var props = await ExecuteWithRetryAsync(() => blobClient.GetPropertiesAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+        return props.Value.ContentLength;
+    }
+
     private async Task<ShareFileClient> GetRemoteFileClientAsync(SharePath path, CancellationToken cancellationToken, bool ensureRemotePathForUpload = false)
     {
         var serviceClient = new ShareServiceClient(
@@ -372,6 +496,22 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         }
 
         return directoryClient.GetFileClient(fileName);
+    }
+
+    private Task<BlobClient> GetRemoteBlobClientAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var serviceClient = new BlobServiceClient(
+            new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
+            _authenticationService.GetCredential());
+        var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
+        var normalized = path.NormalizeRelativePath();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new InvalidOperationException("Remote file path is missing a file name.");
+        }
+
+        return Task.FromResult(containerClient.GetBlobClient(normalized));
     }
 
     private async Task EnsureRemoteUploadFileAsync(ShareFileClient fileClient, long fileLength, bool forceCreate, CancellationToken cancellationToken)

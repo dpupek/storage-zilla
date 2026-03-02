@@ -437,8 +437,9 @@ public sealed class TransferQueueService : ITransferQueueService
         var localPath = NormalizeLocalPath(request.LocalPath);
         var account = (request.RemotePath.StorageAccountName ?? string.Empty).Trim().ToLowerInvariant();
         var share = (request.RemotePath.ShareName ?? string.Empty).Trim().ToLowerInvariant();
+        var provider = request.RemotePath.ProviderKind.ToString().ToLowerInvariant();
         var remoteRelative = request.RemotePath.NormalizeRelativePath().ToLowerInvariant();
-        return $"{request.Direction}|{localPath}|{account}|{share}|{remoteRelative}";
+        return $"{request.Direction}|{localPath}|{account}|{share}|{provider}|{remoteRelative}";
     }
 
     private static string NormalizeLocalPath(string? path)

@@ -6,7 +6,7 @@
 - Auth path is more supportable across environments with WAM-first sign-in and automatic browser fallback.
 
 ## Developers
-- FTP-style side-by-side browsing for local and Azure Files.
+- FTP-style side-by-side browsing for local and Azure Storage roots (Azure File Shares and Blob Containers) with provider inferred automatically.
 - Queue-based uploads/downloads with clear progress and retry behavior.
 - Dual installer outputs per release: signed MSIX (auto-update path) and unsigned MSI (manual/internal deployment path).
 - Saved profile recovery no longer fails the entire sign-in when one Azure Files endpoint is temporarily unavailable.

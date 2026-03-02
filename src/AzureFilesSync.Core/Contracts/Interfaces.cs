@@ -14,7 +14,7 @@ public interface IAzureDiscoveryService
 {
     IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, CancellationToken cancellationToken);
-    IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, CancellationToken cancellationToken);
+    IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, CancellationToken cancellationToken);
 }
 
 public interface IStorageEndpointPreflightService

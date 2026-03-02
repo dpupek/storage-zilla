@@ -376,8 +376,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        vm.RemotePathDisplay = selectedPath;
-        await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        try
+        {
+            await vm.NavigateRemotePathFromInputAsync(selectedPath);
+        }
+        finally
+        {
+            SyncPathComboTextFromViewModel();
+        }
     }
 
     private async void LocalPathCombo_KeyDown(object sender, KeyEventArgs e)
@@ -400,8 +406,14 @@ public partial class MainWindow : Window
         }
 
         e.Handled = true;
-        vm.RemotePathDisplay = combo.Text;
-        await vm.LoadRemoteDirectoryCommand.ExecuteAsync(null);
+        try
+        {
+            await vm.NavigateRemotePathFromInputAsync(combo.Text);
+        }
+        finally
+        {
+            SyncPathComboTextFromViewModel();
+        }
     }
 
     private void LocalPathCombo_DropDownClosed(object sender, EventArgs e) => SyncPathComboTextFromViewModel();

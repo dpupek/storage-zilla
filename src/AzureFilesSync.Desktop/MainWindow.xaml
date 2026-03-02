@@ -35,7 +35,7 @@
                 <TextBlock Margin="10,0,0,0"
                            VerticalAlignment="Center"
                            Foreground="#405A78"
-                           Text="Azure Files dual-pane sync client" />
+                           Text="Azure Storage dual-pane sync client" />
             </StackPanel>
         </Border>
 
@@ -72,11 +72,11 @@
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="Subscription" FontWeight="SemiBold" Margin="0,0,0,4" />
             <TextBlock Grid.Row="0" Grid.Column="1" Text="Storage Account" FontWeight="SemiBold" Margin="8,0,0,4" />
-            <TextBlock Grid.Row="0" Grid.Column="2" Text="File Share" FontWeight="SemiBold" Margin="8,0,0,4" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Remote Root" FontWeight="SemiBold" Margin="8,0,0,4" />
 
             <ComboBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Subscriptions}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedSubscription}" />
             <ComboBox Grid.Row="1" Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding StorageAccounts}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedStorageAccount}" />
-            <ComboBox Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" ItemsSource="{Binding FileShares}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedFileShare}" />
+            <ComboBox Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" ItemsSource="{Binding FileShares}" DisplayMemberPath="DisplayName" SelectedItem="{Binding SelectedFileShare}" />
             <TextBlock Grid.Row="1"
                        Grid.Column="3"
                        HorizontalAlignment="Right"

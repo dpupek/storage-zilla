@@ -14,7 +14,7 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
     {
         if (!context.IsValid)
         {
-            return RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and file share.");
+            return RemoteCapabilitySnapshot.InvalidSelection("Select a valid storage account and remote root.");
         }
 
         if (TryMapEndpointFailure(exception, context, out var endpointFailure))
@@ -26,10 +26,13 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
         {
             if (requestFailed.Status == 403 && string.Equals(requestFailed.ErrorCode, "AuthorizationPermissionMismatch", StringComparison.OrdinalIgnoreCase))
             {
-                var message =
-                    $"No Azure Files data permission for '{context.StorageAccountName}'. " +
-                    "Ask an admin to assign this identity 'Storage File Data Privileged Reader' (browse/read) " +
-                    "or 'Storage File Data Privileged Contributor' (read/write) on this storage account.";
+                var message = context.ProviderKind == RemoteProviderKind.AzureBlob
+                    ? $"No Azure Blob data permission for '{context.StorageAccountName}'. " +
+                      "Ask an admin to assign this identity 'Storage Blob Data Reader' (browse/read) " +
+                      "or 'Storage Blob Data Contributor' (read/write) on this storage account."
+                    : $"No Azure Files data permission for '{context.StorageAccountName}'. " +
+                      "Ask an admin to assign this identity 'Storage File Data Privileged Reader' (browse/read) " +
+                      "or 'Storage File Data Privileged Contributor' (read/write) on this storage account.";
 
                 return new RemoteCapabilitySnapshot(
                     RemoteAccessState.PermissionDenied,
@@ -53,7 +56,7 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
                     false,
                     false,
                     false,
-                    "The selected remote path or share was not found.",
+                    "The selected remote path or root was not found.",
                     DateTimeOffset.UtcNow,
                     requestFailed.ErrorCode,
                     requestFailed.Status);
@@ -107,9 +110,14 @@ public sealed class RemoteErrorInterpreter : IRemoteErrorInterpreter
         }
 
         var endpointHost = $"{context.StorageAccountName}.file.core.windows.net";
+        if (context.ProviderKind == RemoteProviderKind.AzureBlob)
+        {
+            endpointHost = $"{context.StorageAccountName}.blob.core.windows.net";
+        }
+
         var message =
-            $"Cannot reach Azure Files endpoint '{endpointHost}'. " +
-            "Check DNS resolution, firewall/antivirus/proxy allowlists for '*.file.core.windows.net', " +
+            $"Cannot reach Azure {(context.ProviderKind == RemoteProviderKind.AzureBlob ? "Blob" : "Files")} endpoint '{endpointHost}'. " +
+            $"Check DNS resolution, firewall/antivirus/proxy allowlists for '*.{(context.ProviderKind == RemoteProviderKind.AzureBlob ? "blob" : "file")}.core.windows.net', " +
             "or private endpoint DNS configuration for this storage account.";
 
         snapshot = new RemoteCapabilitySnapshot(
