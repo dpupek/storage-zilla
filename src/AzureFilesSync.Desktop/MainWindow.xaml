@@ -348,6 +348,7 @@
                         <ContextMenu Opened="RemoteGridContextMenu_Opened">
                             <MenuItem Header="Download Selection (Start Now)" Click="RemoteDownloadStartNow_Click" />
                             <MenuItem Header="Download Selection (Add to Queue)" Click="RemoteDownloadAddToQueue_Click" />
+                            <MenuItem Header="Open" Click="RemoteOpen_Click" />
                             <MenuItem x:Name="RemoteGoToFileLocationMenuItem" Header="Go to file location" Click="RemoteGoToFileLocation_Click" />
                             <Separator />
                             <MenuItem Header="Rename" Click="RemoteRename_Click" />
@@ -614,3 +615,5 @@
         </StatusBar>
     </Grid>
 </Window>
+
+

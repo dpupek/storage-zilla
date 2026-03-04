@@ -6,6 +6,7 @@ using AzureFilesSync.Infrastructure.Concurrency;
 using AzureFilesSync.Infrastructure.Config;
 using AzureFilesSync.Infrastructure.Docs;
 using AzureFilesSync.Infrastructure.Local;
+using AzureFilesSync.Infrastructure.RemoteEditing;
 using AzureFilesSync.Infrastructure.Transfers;
 using AzureFilesSync.Infrastructure.Updates;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +40,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAzureFilesBrowserService, AzureFilesBrowserService>();
         services.AddSingleton<IRemoteSearchService, RemoteSearchService>();
         services.AddSingleton<IRemoteFileOperationsService, RemoteFileOperationsService>();
+        services.AddSingleton<IRemoteEditSessionService, RemoteEditSessionService>();
         services.AddSingleton<IRemoteErrorInterpreter, RemoteErrorInterpreter>();
         services.AddSingleton<IRemoteCapabilityService, RemoteCapabilityService>();
         services.AddSingleton<IRemoteActionPolicyService, RemoteActionPolicyService>();
@@ -58,3 +60,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
+
+
+

@@ -18,6 +18,7 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private bool _suppressPathSelectionHandlers;
+    private bool _isHandlingRemoteEditPrompt;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
         _viewModel.RecentLocalPaths.CollectionChanged += RecentPaths_CollectionChanged;
         _viewModel.RecentRemotePaths.CollectionChanged += RecentPaths_CollectionChanged;
         Closed += OnClosed;
+        Activated += OnActivated;
         DataContext = _viewModel;
         Loaded += OnLoaded;
     }
@@ -58,8 +60,86 @@ public partial class MainWindow : Window
         _viewModel.RecentLocalPaths.CollectionChanged -= RecentPaths_CollectionChanged;
         _viewModel.RecentRemotePaths.CollectionChanged -= RecentPaths_CollectionChanged;
         Closed -= OnClosed;
+        Activated -= OnActivated;
     }
 
+
+    private async void OnActivated(object? sender, EventArgs e)
+    {
+        if (_isHandlingRemoteEditPrompt)
+        {
+            return;
+        }
+
+        _isHandlingRemoteEditPrompt = true;
+        try
+        {
+            await PromptForRemoteEditChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            ErrorDialog.Show("Failed while checking remote edit changes.", ex);
+        }
+        finally
+        {
+            _isHandlingRemoteEditPrompt = false;
+        }
+    }
+
+    private async Task PromptForRemoteEditChangesAsync()
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        var pendingChanges = await vm.GetPendingRemoteEditChangesAsync();
+        foreach (var change in pendingChanges)
+        {
+            var result = ShowRemoteEditPrompt(change);
+            if (result == MessageBoxResult.No)
+            {
+                continue;
+            }
+
+            if (result == MessageBoxResult.Cancel)
+            {
+                await vm.DiscardRemoteEditAsync(change.SessionId);
+                continue;
+            }
+
+            var sync = await vm.SyncRemoteEditAsync(change.SessionId, overwriteIfRemoteChanged: change.RemoteChanged);
+            if (sync.Outcome == RemoteEditSyncOutcome.RemoteChangedNeedsConfirmation)
+            {
+                var overwrite = MessageBox.Show(
+                    this,
+                    $"Remote file '{change.DisplayName}' changed while you were editing. Overwrite remote with local changes?",
+                    "Remote Changed",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+                if (overwrite == MessageBoxResult.Yes)
+                {
+                    await vm.SyncRemoteEditAsync(change.SessionId, overwriteIfRemoteChanged: true);
+                }
+            }
+        }
+    }
+
+    private MessageBoxResult ShowRemoteEditPrompt(RemoteEditPendingChange change)
+    {
+        var body = change.RemoteChanged
+            ? $"'{change.DisplayName}' was changed locally and the remote file also changed.\n\nYes: upload local and overwrite remote\nNo: keep for later\nCancel: discard local temp copy"
+            : $"'{change.DisplayName}' was changed locally.\n\nYes: upload to remote\nNo: keep for later\nCancel: discard local temp copy";
+
+        return MessageBox.Show(
+            this,
+            body,
+            "Remote File Changes Detected",
+            MessageBoxButton.YesNoCancel,
+            change.RemoteChanged ? MessageBoxImage.Warning : MessageBoxImage.Question,
+            MessageBoxResult.No);
+    }
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (sender is not MainViewModel vm)
@@ -102,6 +182,7 @@ public partial class MainWindow : Window
     private async void LocalDelete_Click(object sender, RoutedEventArgs e) => await DeleteLocalAsync();
     private async void RemoteRename_Click(object sender, RoutedEventArgs e) => await RenameRemoteAsync();
     private async void RemoteDelete_Click(object sender, RoutedEventArgs e) => await DeleteRemoteAsync();
+    private async void RemoteOpen_Click(object sender, RoutedEventArgs e) => await RunRemoteEntryActionAsync(vm => vm.OpenRemoteEntryAsync(RemoteGrid.SelectedItem as RemoteEntry), "Open remote item failed.");
 
     private async Task QueueLocalAsync(bool startImmediately)
     {
@@ -157,6 +238,23 @@ public partial class MainWindow : Window
         }
     }
 
+
+    private async Task RunRemoteEntryActionAsync(Func<MainViewModel, Task> action, string errorMessage)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            await action(vm);
+        }
+        catch (Exception ex)
+        {
+            ErrorDialog.Show(errorMessage, ex);
+        }
+    }
     private async Task RenameLocalAsync()
     {
         if (DataContext is not MainViewModel vm || LocalGrid.SelectedItem is not LocalEntry entry || entry.Name == "..")
@@ -752,3 +850,11 @@ public partial class MainWindow : Window
         };
     }
 }
+
+
+
+
+
+
+
+

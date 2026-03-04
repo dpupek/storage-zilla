@@ -89,6 +89,14 @@ public interface IRemoteFileOperationsService
     Task DeleteAsync(SharePath path, bool recursive, CancellationToken cancellationToken);
 }
 
+
+public interface IRemoteEditSessionService
+{
+    Task<RemoteEditOpenResult> OpenAsync(SharePath remotePath, string displayName, CancellationToken cancellationToken);
+    Task<IReadOnlyList<RemoteEditPendingChange>> GetPendingChangesAsync(CancellationToken cancellationToken);
+    Task<RemoteEditSyncResult> SyncAsync(Guid sessionId, bool overwriteIfRemoteChanged, CancellationToken cancellationToken);
+    Task<bool> DiscardAsync(Guid sessionId, CancellationToken cancellationToken);
+}
 public interface ITransferExecutor
 {
     Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken);
@@ -181,3 +189,5 @@ public interface IUserHelpContentService
     IReadOnlyList<HelpTopic> GetTopics();
     Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken);
 }
+
+

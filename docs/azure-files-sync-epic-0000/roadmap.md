@@ -120,7 +120,21 @@
 - [x] Update selector labeling/UX from `File Share` to `Remote Root` with kind-aware display names.
 - [x] Persist selected remote root kind in connection profile for deterministic profile restore.
 - [x] Add unit tests for provider mapping and queue dedupe-by-provider behavior.
+- [x] Treat empty blob virtual-folder listings for non-root paths as `NotFound` (with fallback/restore) instead of showing misleading blank grid states.
+- [x] Preserve legacy profile restore semantics when `RemoteRootKind` is missing by preferring `FileShare` on overlapping root names.
+- [x] Update user-facing README and user guide content to document unified remote roots (`File Share` + `Blob Container`) and remote search workflows.
 
+
+## Phase 12: Remote File Edit Sync-Back (child-0011)
+- [x] Add remote-pane file open action that downloads remote file to managed temp path and launches system-associated editor/viewer.
+- [x] Track remote edit sessions and detect local changes using filesystem watcher + fingerprint verification.
+- [x] Add app-refocus sync prompt flow (`Upload`, `Later`, `Discard`) for changed remote edit sessions.
+- [x] Add remote change conflict detection before sync-back and require explicit overwrite confirmation.
+- [x] Fix dirty-hint false positives by requiring real local fingerprint delta before pending/sync decisions.
+- [x] Fix open-failure cleanup by rolling back temp file/watcher/session when local launch fails.
+- [x] Add integration tests for open failure cleanup and dirty-hint-only no-change path.
+- [x] Add UI regression test for refocus path when no pending remote edit changes.
 ## Questions and Decisions
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.
+

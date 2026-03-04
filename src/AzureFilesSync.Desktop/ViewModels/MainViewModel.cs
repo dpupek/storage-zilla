@@ -48,6 +48,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IRemoteSearchService _remoteSearchService;
     private readonly ILocalFileOperationsService _localFileOperationsService;
     private readonly IRemoteFileOperationsService _remoteFileOperationsService;
+    private readonly IRemoteEditSessionService _remoteEditSessionService;
     private readonly ITransferConflictProbeService _transferConflictProbeService;
     private readonly IConflictResolutionPromptService _conflictResolutionPromptService;
     private readonly ITransferQueueService _transferQueueService;
@@ -336,7 +337,8 @@ public partial class MainViewModel : ObservableObject
         IUserHelpContentService userHelpContentService,
         TimeSpan? remoteOpenDirectoryTimeout = null,
         IRemoteOperationCoordinator? remoteOperationCoordinator = null,
-        IPathDisplayFormatter? pathDisplayFormatter = null)
+        IPathDisplayFormatter? pathDisplayFormatter = null,
+        IRemoteEditSessionService? remoteEditSessionService = null)
     {
         _authenticationService = authenticationService;
         _azureDiscoveryService = azureDiscoveryService;
@@ -358,6 +360,7 @@ public partial class MainViewModel : ObservableObject
         _remoteActionPolicyService = remoteActionPolicyService;
         _appUpdateService = appUpdateService;
         _userHelpContentService = userHelpContentService;
+        _remoteEditSessionService = remoteEditSessionService ?? NoOpRemoteEditSessionService.Instance;
         _remoteOpenDirectoryTimeout = remoteOpenDirectoryTimeout ?? DefaultRemoteOpenDirectoryTimeout;
         UpdateChannel = _appUpdateService.CurrentChannel;
         RecentRemotePaths.CollectionChanged += OnRecentRemotePathsCollectionChanged;
@@ -2671,10 +2674,7 @@ public partial class MainViewModel : ObservableObject
 
         if (!entry.IsDirectory)
         {
-            Log.Debug(
-                "Skipping remote open because selected entry is not a directory. Name={Name} Path={Path}",
-                entry.Name,
-                entry.FullPath);
+            await OpenRemoteForEditingAsync(entry);
             return;
         }
 
@@ -2700,6 +2700,26 @@ public partial class MainViewModel : ObservableObject
             timeoutMessage: "Opening remote folder timed out. View restored to previous path.");
     }
 
+
+    public async Task OpenRemoteForEditingAsync(RemoteEntry? entry)
+    {
+        if (entry is null || entry.Name == ".." || entry.IsDirectory || SelectedStorageAccount is null || SelectedFileShare is null)
+        {
+            return;
+        }
+
+        var path = BuildSelectedSharePath(entry.FullPath);
+        await _remoteEditSessionService.OpenAsync(path, entry.Name, CancellationToken.None);
+    }
+
+    public Task<IReadOnlyList<RemoteEditPendingChange>> GetPendingRemoteEditChangesAsync() =>
+        _remoteEditSessionService.GetPendingChangesAsync(CancellationToken.None);
+
+    public Task<RemoteEditSyncResult> SyncRemoteEditAsync(Guid sessionId, bool overwriteIfRemoteChanged) =>
+        _remoteEditSessionService.SyncAsync(sessionId, overwriteIfRemoteChanged, CancellationToken.None);
+
+    public Task<bool> DiscardRemoteEditAsync(Guid sessionId) =>
+        _remoteEditSessionService.DiscardAsync(sessionId, CancellationToken.None);
     public async Task GoToRemoteEntryLocationAsync(RemoteEntry? entry)
     {
         if (entry is null || SelectedStorageAccount is null || SelectedFileShare is null || entry.Name == "..")
@@ -3623,6 +3643,25 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusQueueText));
     }
 
+
+    private sealed class NoOpRemoteEditSessionService : IRemoteEditSessionService
+    {
+        public static NoOpRemoteEditSessionService Instance { get; } = new();
+
+        public Task<RemoteEditOpenResult> OpenAsync(SharePath remotePath, string displayName, CancellationToken cancellationToken)
+        {
+            throw new InvalidOperationException("Remote edit session service is not configured.");
+        }
+
+        public Task<IReadOnlyList<RemoteEditPendingChange>> GetPendingChangesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<RemoteEditPendingChange>>([]);
+
+        public Task<RemoteEditSyncResult> SyncAsync(Guid sessionId, bool overwriteIfRemoteChanged, CancellationToken cancellationToken) =>
+            Task.FromResult(new RemoteEditSyncResult(sessionId, RemoteEditSyncOutcome.SessionNotFound));
+
+        public Task<bool> DiscardAsync(Guid sessionId, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+    }
     private sealed class SchedulerBackedRemoteOperationCoordinator : IRemoteOperationCoordinator
     {
         private readonly IRemoteReadTaskScheduler _scheduler;
@@ -3710,3 +3749,14 @@ public partial class MainViewModel : ObservableObject
 
     public sealed record DeleteBatchResult(int Total, int Deleted, int Failed);
 }
+
+
+
+
+
+
+
+
+
+
+

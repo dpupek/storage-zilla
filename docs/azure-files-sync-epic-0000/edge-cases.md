@@ -32,10 +32,19 @@
 - User cancels a long-running search and immediately starts a new one; stale read work can leak into perceived status without strict latest-only scheduling.
 - Search status near top command controls can be missed during long scans if users focus on grid results.
 
+## Multi-Provider Path Resolution
+- Blob hierarchy listing can return an empty page for a non-existent virtual-folder prefix without throwing, which can look like a valid empty folder.
+- User-entered/selected remote paths can be invalid relative to the currently selected remote root.
+- Legacy saved profiles may omit `RemoteRootKind`, making overlapping file share/container names ambiguous during restore.
+
 ## UI Layout
 - WPF `ToolBar`/`ToolBarTray` overflow behavior can collapse or unpredictably size embedded stretch controls (combo/text inputs), causing unusable command rows.
 
 ## Mitigations
+- Guard remote-edit pending/sync decisions with real local fingerprint deltas; treat watcher dirty flag as hint only.
+- If local open fails after download, rollback watcher/session and delete temp file immediately.
+- Prompt overwrite confirmation when remote fingerprint changed since session start.
+
 - Explicit error messages and retry controls.
 - Checkpoint persistence for resume.
 - Mandatory delete confirmation for mirror deletes.
@@ -61,3 +70,11 @@
 - Aggregate remote roots from both Azure Files and Azure Blob endpoints so blob-only accounts remain usable.
 - Infer provider from selected root kind and carry provider metadata in `SharePath`/`RemoteContext` so browse/operations/transfers route correctly without extra UI state.
 - Include provider kind in queue dedupe keys to avoid cross-provider false duplicates when relative paths match.
+- Treat empty non-root blob listing results as `NotFound` after explicit entry-details verification so invalid virtual paths do not render misleading blank grids.
+- Use bounded remote-path fallback (`requested -> previous -> root`) with deduped attempts to avoid path-navigation loops while recovering from invalid paths.
+- Default legacy profile restore preference to `FileShare` when `RemoteRootKind` is missing to preserve pre-blob behavior for overlapping root names.
+
+## Remote Edit
+- File system watcher can emit noisy change signals without real content delta.
+- Local shell open can fail (missing association/launch error) after temp file download.
+- User can edit while remote file also changes, requiring sync conflict decision.
