@@ -135,10 +135,42 @@ public sealed class RemoteEditSessionServiceTests
         service.Dispose();
         #endregion
     }
+    [Fact]
+    public async Task SyncAsync_WhenLocalFileIsLocked_ReturnsLocalFileInUseAndKeepsSession()
+    {
+        #region Arrange
+        var transfer = new StubTransferExecutor { ThrowOnUploadIOException = true };
+        var browser = new StubAzureFilesBrowserService();
+        var localOps = new StubLocalFileOperationsService();
+        var service = new RemoteEditSessionService(transfer, browser, localOps);
+        var remotePath = new SharePath("storage", "share", "locked.doc");
+        browser.CurrentEntry = new RemoteEntry("locked.doc", "locked.doc", false, 10, DateTimeOffset.UtcNow);
+        var opened = await service.OpenAsync(remotePath, "locked.doc", CancellationToken.None);
+
+        await File.WriteAllTextAsync(opened.LocalPath, "updated-local", CancellationToken.None);
+        #endregion
+
+        #region Initial Assert
+        Assert.True(File.Exists(opened.LocalPath));
+        #endregion
+
+        #region Act
+        var result = await service.SyncAsync(opened.SessionId, overwriteIfRemoteChanged: false, CancellationToken.None);
+        var pending = await service.GetPendingChangesAsync(CancellationToken.None);
+        #endregion
+
+        #region Assert
+        Assert.Equal(RemoteEditSyncOutcome.LocalFileInUse, result.Outcome);
+        Assert.Single(pending);
+        await service.DiscardAsync(opened.SessionId, CancellationToken.None);
+        service.Dispose();
+        #endregion
+    }
 
     private sealed class StubTransferExecutor : ITransferExecutor
     {
         public List<TransferRequest> UploadedRequests { get; } = [];
+        public bool ThrowOnUploadIOException { get; set; }
 
         public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(0L);
@@ -155,6 +187,11 @@ public sealed class RemoteEditSessionServiceTests
                 Directory.CreateDirectory(Path.GetDirectoryName(request.LocalPath)!);
                 File.WriteAllText(request.LocalPath, "seed");
                 return Task.CompletedTask;
+            }
+
+            if (ThrowOnUploadIOException)
+            {
+                throw new IOException("The process cannot access the file because it is being used by another process.", unchecked((int)0x80070020));
             }
 
             UploadedRequests.Add(request);
@@ -200,3 +237,5 @@ public sealed class RemoteEditSessionServiceTests
         public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
+
+

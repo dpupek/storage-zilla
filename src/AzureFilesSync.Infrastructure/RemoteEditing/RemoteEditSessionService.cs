@@ -139,12 +139,22 @@ public sealed class RemoteEditSessionService : IRemoteEditSessionService, IDispo
             ConflictPolicy: TransferConflictPolicy.Overwrite,
             MaxConcurrency: 1);
 
-        await _transferExecutor.ExecuteAsync(
-            Guid.NewGuid(),
-            request,
-            checkpoint: null,
-            _ => { },
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _transferExecutor.ExecuteAsync(
+                Guid.NewGuid(),
+                request,
+                checkpoint: null,
+                _ => { },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException ex) when (IsLocalFileInUse(ex))
+        {
+            return new RemoteEditSyncResult(
+                sessionId,
+                RemoteEditSyncOutcome.LocalFileInUse,
+                "Local file is currently in use. Close the editor and try syncing again.");
+        }
 
         await RemoveAndCleanupSessionAsync(sessionId).ConfigureAwait(false);
         return new RemoteEditSyncResult(sessionId, RemoteEditSyncOutcome.Synced);
@@ -283,6 +293,17 @@ public sealed class RemoteEditSessionService : IRemoteEditSessionService, IDispo
         return watcher;
     }
 
+    private static bool IsLocalFileInUse(IOException ex)
+    {
+        const int sharingViolation = unchecked((int)0x80070020);
+        if (ex.HResult == sharingViolation)
+        {
+            return true;
+        }
+
+        return ex.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase)
+            || (ex.InnerException is IOException inner && IsLocalFileInUse(inner));
+    }
     private bool HasLocalChanged(SessionState session)
     {
         var current = LocalFingerprint.FromPath(session.LocalPath);
@@ -360,3 +381,5 @@ public sealed class RemoteEditSessionService : IRemoteEditSessionService, IDispo
         FileSystemWatcher Watcher,
         bool Dirty = false);
 }
+
+

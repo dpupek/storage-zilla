@@ -110,7 +110,17 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         };
 
         await ExecuteWithRetryAsync(
-            () => blobClient.UploadAsync(request.LocalPath, uploadOptions, cancellationToken),
+            async () =>
+            {
+                await using var input = new FileStream(
+                    request.LocalPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    ResolveChunkSize(request),
+                    useAsync: true);
+                await blobClient.UploadAsync(input, uploadOptions, cancellationToken).ConfigureAwait(false);
+            },
             cancellationToken).ConfigureAwait(false);
         progress(new TransferProgress(totalBytes, totalBytes));
         await _checkpointStore.SaveAsync(
@@ -645,3 +655,4 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         }
     }
 }
+

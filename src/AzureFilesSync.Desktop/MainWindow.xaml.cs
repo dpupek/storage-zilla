@@ -109,6 +109,17 @@ public partial class MainWindow : Window
             }
 
             var sync = await vm.SyncRemoteEditAsync(change.SessionId, overwriteIfRemoteChanged: change.RemoteChanged);
+            if (sync.Outcome == RemoteEditSyncOutcome.LocalFileInUse)
+            {
+                MessageBox.Show(
+                    this,
+                    sync.Message ?? $"'{change.DisplayName}' is still open in another application. Close it and try again.",
+                    "File In Use",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                continue;
+            }
+
             if (sync.Outcome == RemoteEditSyncOutcome.RemoteChangedNeedsConfirmation)
             {
                 var overwrite = MessageBox.Show(
@@ -120,7 +131,16 @@ public partial class MainWindow : Window
                     MessageBoxResult.No);
                 if (overwrite == MessageBoxResult.Yes)
                 {
-                    await vm.SyncRemoteEditAsync(change.SessionId, overwriteIfRemoteChanged: true);
+                    var overwriteSync = await vm.SyncRemoteEditAsync(change.SessionId, overwriteIfRemoteChanged: true);
+                    if (overwriteSync.Outcome == RemoteEditSyncOutcome.LocalFileInUse)
+                    {
+                        MessageBox.Show(
+                            this,
+                            overwriteSync.Message ?? $"'{change.DisplayName}' is still open in another application. Close it and try again.",
+                            "File In Use",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+                    }
                 }
             }
         }
@@ -850,6 +870,7 @@ public partial class MainWindow : Window
         };
     }
 }
+
 
 
 

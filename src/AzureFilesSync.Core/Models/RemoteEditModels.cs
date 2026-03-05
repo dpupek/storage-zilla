@@ -14,6 +14,7 @@ public sealed record RemoteEditPendingChange(
 public enum RemoteEditSyncOutcome
 {
     Synced,
+    LocalFileInUse,
     NoLocalChanges,
     SessionNotFound,
     RemoteChangedNeedsConfirmation
@@ -23,3 +24,4 @@ public sealed record RemoteEditSyncResult(
     Guid SessionId,
     RemoteEditSyncOutcome Outcome,
     string? Message = null);
+
