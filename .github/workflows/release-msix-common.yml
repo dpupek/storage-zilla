@@ -368,6 +368,10 @@ jobs:
             "- Tag: ${{ steps.version.outputs.tag }}"
             "- Channel: $channel"
             ""
+            "## Links"
+            "- Changelog: https://github.com/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }}"
+            "- Release README: https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.tag }}/README.md"
+            ""
             "## Artifacts"
             "- Signed MSIX package"
             "- Unsigned MSI package"
@@ -375,7 +379,12 @@ jobs:
             "- SHA256 checksums (SHA256SUMS.txt)"
             "- Public signing certificate (StorageZilla-Signing-PublicKey.cer)"
             ""
-            "## Trust"
+            "## Certificate Trust (when needed)"
+            "- Why: Some environments do not already trust the signing chain used for the MSIX signature."
+            "- If Windows blocks install or shows unknown publisher, import StorageZilla-Signing-PublicKey.cer into Trusted People (CurrentUser for per-user install, LocalMachine for all users)."
+            "- After importing, retry the MSIX install so Windows can validate the package signature."
+            ""
+            "## Signing Certificate"
             "- Certificate Subject: $env:MSIX_CERT_SUBJECT"
             "- Certificate Thumbprint: $env:MSIX_CERT_THUMBPRINT"
             "- Certificate Expiration (UTC): $env:MSIX_CERT_NOT_AFTER"
@@ -421,4 +430,3 @@ jobs:
             ${{ steps.cert_artifact.outputs.cer_path }}
             ${{ steps.notes_artifact.outputs.notes_path }}
             ${{ runner.temp }}\msix\SHA256SUMS.txt
-
