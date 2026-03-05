@@ -17,6 +17,56 @@ namespace AzureFilesSync.UITests;
 public sealed class MainWindowAndViewModelUiTests
 {
     [Fact]
+    public async Task MainWindow_RefocusPrompt_WhenNoPendingRemoteEditChanges_DoesNotSyncOrDiscard()
+    {
+        #region Arrange
+        var remoteEdit = new StubRemoteEditSessionService();
+        #endregion
+
+        #region Act
+        await RunInStaAsync(async () =>
+        {
+            var viewModel = CreateViewModelWithDependencies(
+                new StubAuthenticationService(),
+                new StubDiscoveryService(),
+                null,
+                new StubLocalBrowserService(),
+                new StubAzureBrowserService(),
+                new StubLocalFileOperationsService(),
+                new StubRemoteFileOperationsService(),
+                new StubTransferConflictProbeService(),
+                new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+                new SpyTransferQueueService(),
+                new StubMirrorPlannerService(),
+                new StubMirrorExecutionService(),
+                new InMemoryConnectionProfileStore(),
+                new StubRemoteCapabilityService(),
+                new StubRemoteActionPolicyService(),
+                remoteEditSessionService: remoteEdit);
+
+            var window = new AzureFilesSync.Desktop.MainWindow(viewModel);
+            try
+            {
+                var method = typeof(AzureFilesSync.Desktop.MainWindow)
+                    .GetMethod("PromptForRemoteEditChangesAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                var task = (Task)method.Invoke(window, null)!;
+                await task;
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+        #endregion
+
+        #region Assert
+        Assert.Equal(1, remoteEdit.PendingQueryCount);
+        Assert.Empty(remoteEdit.SyncCalls);
+        Assert.Empty(remoteEdit.DiscardCalls);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_QueueCommands_CallTransferQueueService()
     {
         #region Arrange
@@ -1770,7 +1820,8 @@ public sealed class MainWindowAndViewModelUiTests
         IAppUpdateService? appUpdateService = null,
         IRemoteSearchService? remoteSearchService = null,
         IRemoteReadTaskScheduler? remoteReadTaskScheduler = null,
-        TimeSpan? remoteOpenDirectoryTimeout = null) =>
+        TimeSpan? remoteOpenDirectoryTimeout = null,
+        IRemoteEditSessionService? remoteEditSessionService = null) =>
         new(
             authenticationService,
             discoveryService,
@@ -1791,7 +1842,8 @@ public sealed class MainWindowAndViewModelUiTests
             remoteActionPolicyService,
             appUpdateService ?? new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.", null)),
             new StubUserHelpContentService(),
-            remoteOpenDirectoryTimeout);
+            remoteOpenDirectoryTimeout,
+            remoteEditSessionService: remoteEditSessionService);
 
     private static void SetValidRemoteSelection(MainViewModel viewModel)
     {
@@ -1800,6 +1852,27 @@ public sealed class MainWindowAndViewModelUiTests
         viewModel.SelectedFileShare = new FileShareItem("share");
     }
 
+
+    private static Task RunInStaAsync(Func<Task> work)
+    {
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                work().GetAwaiter().GetResult();
+                tcs.SetResult(null);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return tcs.Task;
+    }
     private sealed class SpyTransferQueueService : ITransferQueueService
     {
         public event EventHandler<TransferJobSnapshot>? JobUpdated;
@@ -2037,6 +2110,35 @@ public sealed class MainWindowAndViewModelUiTests
             SearchIncrementalBehavior(request, cancellationToken);
     }
 
+
+    private sealed class StubRemoteEditSessionService : IRemoteEditSessionService
+    {
+        public int PendingQueryCount { get; private set; }
+        public List<Guid> DiscardCalls { get; } = [];
+        public List<(Guid SessionId, bool Overwrite)> SyncCalls { get; } = [];
+        public IReadOnlyList<RemoteEditPendingChange> PendingChanges { get; set; } = [];
+
+        public Task<RemoteEditOpenResult> OpenAsync(SharePath remotePath, string displayName, CancellationToken cancellationToken) =>
+            Task.FromResult(new RemoteEditOpenResult(Guid.NewGuid(), @"C:\\temp\\remote-edit.txt"));
+
+        public Task<IReadOnlyList<RemoteEditPendingChange>> GetPendingChangesAsync(CancellationToken cancellationToken)
+        {
+            PendingQueryCount++;
+            return Task.FromResult(PendingChanges);
+        }
+
+        public Task<RemoteEditSyncResult> SyncAsync(Guid sessionId, bool overwriteIfRemoteChanged, CancellationToken cancellationToken)
+        {
+            SyncCalls.Add((sessionId, overwriteIfRemoteChanged));
+            return Task.FromResult(new RemoteEditSyncResult(sessionId, RemoteEditSyncOutcome.Synced));
+        }
+
+        public Task<bool> DiscardAsync(Guid sessionId, CancellationToken cancellationToken)
+        {
+            DiscardCalls.Add(sessionId);
+            return Task.FromResult(true);
+        }
+    }
     private sealed class StubRemoteReadTaskScheduler : IRemoteReadTaskScheduler
     {
         public Task RunLatestAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
@@ -2444,4 +2546,9 @@ public sealed class MainWindowAndViewModelUiTests
             Task.FromResult(new HelpDocument(topicId, "Overview", "# Help", "<html><body><h1>Help</h1></body></html>", "README.md"));
     }
 }
+
+
+
+
+
 
