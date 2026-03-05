@@ -413,7 +413,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.release_name }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes_artifact.outputs.notes_path }}
           files: |
             ${{ steps.artifact.outputs.msix_path }}
             ${{ steps.msi_artifact.outputs.msi_path }}
@@ -421,3 +421,4 @@ jobs:
             ${{ steps.cert_artifact.outputs.cer_path }}
             ${{ steps.notes_artifact.outputs.notes_path }}
             ${{ runner.temp }}\msix\SHA256SUMS.txt
+
