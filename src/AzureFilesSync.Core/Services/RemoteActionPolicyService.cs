@@ -12,7 +12,18 @@ public sealed class RemoteActionPolicyService : IRemoteActionPolicyService
             return new RemoteActionPolicy(false, false, false, false, "Remote capability not evaluated yet.");
         }
 
-        if (capability.State != RemoteAccessState.Accessible)
+        if (inputs.IsMirrorPlanning)
+        {
+            return new RemoteActionPolicy(false, false, false, false, "Mirror planning is currently running.");
+        }
+
+        var canDoAnything =
+            capability.CanUpload ||
+            capability.CanDownload ||
+            capability.CanPlanMirror ||
+            capability.CanExecuteMirror;
+
+        if (!canDoAnything)
         {
             var reason = string.IsNullOrWhiteSpace(capability.UserMessage)
                 ? "Remote side is not accessible."
@@ -20,15 +31,11 @@ public sealed class RemoteActionPolicyService : IRemoteActionPolicyService
             return new RemoteActionPolicy(false, false, false, false, reason);
         }
 
-        if (inputs.IsMirrorPlanning)
-        {
-            return new RemoteActionPolicy(false, false, false, false, "Mirror planning is currently running.");
-        }
-
         return new RemoteActionPolicy(
-            CanEnqueueUpload: inputs.HasSelectedLocalFile,
-            CanEnqueueDownload: inputs.HasSelectedRemoteFile,
-            CanPlanMirror: true,
-            CanExecuteMirror: inputs.HasMirrorPlan);
+            CanEnqueueUpload: capability.CanUpload && inputs.HasSelectedLocalFile,
+            CanEnqueueDownload: capability.CanDownload && inputs.HasSelectedRemoteFile,
+            CanPlanMirror: capability.CanPlanMirror,
+            CanExecuteMirror: capability.CanExecuteMirror && inputs.HasMirrorPlan,
+            DisableReason: string.IsNullOrWhiteSpace(capability.UserMessage) ? null : capability.UserMessage);
     }
 }

@@ -481,10 +481,6 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
                 ShareTokenIntent = ShareTokenIntent.Backup
             });
         var shareClient = serviceClient.GetShareClient(path.ShareName);
-        if (ensureRemotePathForUpload)
-        {
-            await ExecuteWithRetryAsync(() => shareClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
-        }
 
         var normalized = path.NormalizeRelativePath();
         var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
