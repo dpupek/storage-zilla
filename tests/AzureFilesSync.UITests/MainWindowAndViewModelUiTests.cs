@@ -2,6 +2,7 @@ using Azure;
 using Azure.Core;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Core.Services;
 using AzureFilesSync.Desktop.Dialogs;
 using AzureFilesSync.Desktop.Models;
 using AzureFilesSync.Desktop.Services;
@@ -10,6 +11,7 @@ using System.Collections;
 using System.IO;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Reflection;
 using Xunit;
 
 namespace AzureFilesSync.UITests;
@@ -182,6 +184,130 @@ public sealed class MainWindowAndViewModelUiTests
         #region Assert
         Assert.Equal(string.Empty, viewModel.RemotePaneStatusMessage);
         Assert.True(viewModel.BuildMirrorPlanCommand.CanExecute(null));
+        Assert.True(viewModel.EnqueueUploadCommand.CanExecute(null));
+        Assert.True(viewModel.EnqueueDownloadCommand.CanExecute(null));
+        #endregion
+    }
+
+    [Fact]
+    public void MainViewModel_FailedUploadPermissionMismatch_DisablesFurtherUploads_ButKeepsRemoteBrowsable()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new RemoteActionPolicyService());
+        viewModel.SelectedSubscription = new SubscriptionItem("sub", "Subscription");
+        viewModel.SelectedStorageAccount = new StorageAccountItem("sub", "smarthorizd5090cce0a", "rg");
+        viewModel.SelectedFileShare = new FileShareItem("smarthorizons-site");
+        viewModel.SelectedLocalEntry = new LocalEntry("local.txt", @"C:\work\local.txt", false, 10, DateTimeOffset.UtcNow);
+        viewModel.SelectedRemoteEntry = new RemoteEntry("remote.txt", "remote.txt", false, 20, DateTimeOffset.UtcNow);
+
+        var failedUpload = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(
+                TransferDirection.Upload,
+                @"C:\work\local.txt",
+                new SharePath("smarthorizd5090cce0a", "smarthorizons-site", "public/_email/sh_institute/2026/local.txt")),
+            TransferJobStatus.Failed,
+            0,
+            10,
+            "This request is not authorized to perform this operation using this permission. ErrorCode: AuthorizationPermissionMismatch",
+            0);
+        #endregion
+
+        #region Initial Assert
+        Assert.True(viewModel.EnqueueUploadCommand.CanExecute(null));
+        #endregion
+
+        #region Act
+        queue.RaiseJobUpdated(failedUpload);
+        #endregion
+
+        #region Assert
+        Assert.Contains("does not have Azure Files upload permission", viewModel.RemotePaneStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.False(viewModel.EnqueueUploadCommand.CanExecute(null));
+        Assert.True(viewModel.EnqueueDownloadCommand.CanExecute(null));
+        Assert.True(viewModel.RemoteCapability?.CanBrowse);
+        #endregion
+    }
+
+    [Fact]
+    public void MainViewModel_FailedUploadPermissionMismatch_FromDifferentRemoteContext_DoesNotChangeCurrentCapability()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new RemoteActionPolicyService());
+        viewModel.SelectedSubscription = new SubscriptionItem("sub-b", "Subscription B");
+        viewModel.SelectedStorageAccount = new StorageAccountItem("sub-b", "storage-b", "rg-b");
+        viewModel.SelectedFileShare = new FileShareItem("share-b");
+        viewModel.SelectedLocalEntry = new LocalEntry("local.txt", @"C:\work\local.txt", false, 10, DateTimeOffset.UtcNow);
+        viewModel.SelectedRemoteEntry = new RemoteEntry("remote.txt", "remote.txt", false, 20, DateTimeOffset.UtcNow);
+
+        var baselineCapability = new RemoteCapabilitySnapshot(
+            RemoteAccessState.Accessible,
+            CanBrowse: true,
+            CanUpload: true,
+            CanDownload: true,
+            CanPlanMirror: true,
+            CanExecuteMirror: true,
+            UserMessage: string.Empty,
+            EvaluatedUtc: DateTimeOffset.UtcNow);
+        var failedUpload = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(
+                TransferDirection.Upload,
+                @"C:\work\local.txt",
+                new SharePath("storage-a", "share-a", "public/_email/sh_institute/2026/local.txt")),
+            TransferJobStatus.Failed,
+            0,
+            10,
+            "This request is not authorized to perform this operation using this permission. ErrorCode: AuthorizationPermissionMismatch",
+            0);
+        #endregion
+
+        #region Initial Assert
+        ApplyCapability(viewModel, baselineCapability);
+        Assert.Equal(string.Empty, viewModel.RemotePaneStatusMessage);
+        Assert.True(viewModel.EnqueueUploadCommand.CanExecute(null));
+        Assert.True(viewModel.EnqueueDownloadCommand.CanExecute(null));
+        #endregion
+
+        #region Act
+        queue.RaiseJobUpdated(failedUpload);
+        #endregion
+
+        #region Assert
+        Assert.Equal(baselineCapability, viewModel.RemoteCapability);
+        Assert.Equal(string.Empty, viewModel.RemotePaneStatusMessage);
         Assert.True(viewModel.EnqueueUploadCommand.CanExecute(null));
         Assert.True(viewModel.EnqueueDownloadCommand.CanExecute(null));
         #endregion
@@ -1644,6 +1770,45 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public async Task MainViewModel_SwitchingSubscription_LoadsNewStorageAccounts()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new MultiSubscriptionDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new RemoteActionPolicyService());
+        #endregion
+
+        #region Initial Assert
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        Assert.Equal(["alpha-a", "alpha-b"], viewModel.StorageAccounts.Select(x => x.Name).ToArray());
+        #endregion
+
+        #region Act
+        viewModel.SelectedSubscription = viewModel.Subscriptions.Single(x => x.Id == "sub-beta");
+        await WaitUntilAsync(() => !viewModel.IsRemoteLoading, TimeSpan.FromSeconds(5));
+        #endregion
+
+        #region Assert
+        Assert.Equal(["beta-a", "beta-b"], viewModel.StorageAccounts.Select(x => x.Name).ToArray());
+        Assert.Equal("beta-a", viewModel.SelectedStorageAccount?.Name);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_SignIn_WithBrowserFallback_ShowsFallbackStatus()
     {
         #region Arrange
@@ -1852,6 +2017,29 @@ public sealed class MainWindowAndViewModelUiTests
         viewModel.SelectedFileShare = new FileShareItem("share");
     }
 
+    private static void ApplyCapability(MainViewModel viewModel, RemoteCapabilitySnapshot snapshot)
+    {
+        var method = typeof(MainViewModel).GetMethod("ApplyCapability", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(viewModel, [snapshot]);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition(), "Timed out waiting for condition.");
+    }
+
 
     private static Task RunInStaAsync(Func<Task> work)
     {
@@ -1938,6 +2126,8 @@ public sealed class MainWindowAndViewModelUiTests
         }
 
         public IReadOnlyList<TransferJobSnapshot> Snapshot() => SnapshotItems.ToList();
+
+        public void RaiseJobUpdated(TransferJobSnapshot snapshot) => JobUpdated?.Invoke(this, snapshot);
     }
 
     private sealed class StubAuthenticationService : IAuthenticationService
@@ -2010,6 +2200,40 @@ public sealed class MainWindowAndViewModelUiTests
                 yield return new FileShareItem("zshare");
                 yield return new FileShareItem("ashare");
                 yield return new FileShareItem("mshare");
+            }
+        }
+    }
+
+    private sealed class MultiSubscriptionDiscoveryService : IAzureDiscoveryService
+    {
+        public async IAsyncEnumerable<SubscriptionItem> ListSubscriptionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield return new SubscriptionItem("sub-alpha", "Alpha");
+            yield return new SubscriptionItem("sub-beta", "Beta");
+        }
+
+        public async IAsyncEnumerable<StorageAccountItem> ListStorageAccountsAsync(string subscriptionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+
+            if (subscriptionId == "sub-alpha")
+            {
+                yield return new StorageAccountItem(subscriptionId, "alpha-b", "rg-alpha");
+                yield return new StorageAccountItem(subscriptionId, "alpha-a", "rg-alpha");
+                yield break;
+            }
+
+            yield return new StorageAccountItem(subscriptionId, "beta-b", "rg-beta");
+            yield return new StorageAccountItem(subscriptionId, "beta-a", "rg-beta");
+        }
+
+        public async IAsyncEnumerable<FileShareItem> ListFileSharesAsync(string storageAccountName, bool includeFileShares, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            if (includeFileShares)
+            {
+                yield return new FileShareItem($"{storageAccountName}-share");
             }
         }
     }
@@ -2495,12 +2719,10 @@ public sealed class MainWindowAndViewModelUiTests
 
     private sealed class StubRemoteActionPolicyService : IRemoteActionPolicyService
     {
+        private static readonly RemoteActionPolicyService Inner = new();
+
         public RemoteActionPolicy Compute(RemoteCapabilitySnapshot? capability, RemoteActionInputs inputs) =>
-            new(
-                CanEnqueueUpload: capability?.State == RemoteAccessState.Accessible && inputs.HasSelectedLocalFile,
-                CanEnqueueDownload: capability?.State == RemoteAccessState.Accessible && inputs.HasSelectedRemoteFile,
-                CanPlanMirror: capability?.State == RemoteAccessState.Accessible && !inputs.IsMirrorPlanning,
-                CanExecuteMirror: capability?.State == RemoteAccessState.Accessible && inputs.HasMirrorPlan);
+            Inner.Compute(capability, inputs);
     }
 
     private sealed class StubAppUpdateService : IAppUpdateService

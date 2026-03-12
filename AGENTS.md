@@ -55,6 +55,8 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - Keep permission and expected access failures non-modal when possible:
   - show remote-pane informational card
   - do not spam modal error dialogs for known permission states
+- Capability changes inferred from background transfer results must be scoped to the currently selected remote context.
+  - Do not let stale queue failures from a previously selected storage account/share overwrite the active pane state.
 - Keep actionable commands capability-gated:
   - upload/download/mirror buttons should disable when remote side is not accessible.
 - Use menu and toolbar actions for primary commands (`Sign In`, `Save Profile`, `Help`, `Settings`).
@@ -79,6 +81,8 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
   2. Initial Assert
   3. Act
   4. Final Assert
+- For async UI/view-model flows, wait on observable completion state or explicit test-controlled signals.
+  - Prefer `IsRemoteLoading`, task completion sources, or deterministic polling helpers over fixed sleeps such as `Task.Delay(50)`.
 - Test project intent:
   - `AzureFilesSync.Tests`: unit tests for core services and policies
   - `AzureFilesSync.IntegrationTests`: integration-level service behaviors and storage adapters

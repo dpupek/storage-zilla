@@ -1879,6 +1879,13 @@ public partial class MainViewModel : ObservableObject
         NavigateRemoteUpCommand.NotifyCanExecuteChanged();
         CreateRemoteFolderCommand.NotifyCanExecuteChanged();
 
+        Log.Debug(
+            "Selected subscription changed. SubscriptionId={SubscriptionId} Name={SubscriptionName} RestoringProfile={IsRestoringProfile} SuppressHandlers={SuppressHandlers}",
+            value?.Id,
+            value?.Name,
+            _isRestoringProfile,
+            _suppressSelectionHandlers);
+
         if (value is null || _isRestoringProfile || _suppressSelectionHandlers)
         {
             return;
@@ -2832,10 +2839,11 @@ public partial class MainViewModel : ObservableObject
 
     private void OnJobUpdated(object? sender, TransferJobSnapshot e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        void ApplyUpdate()
         {
             var existing = QueueItems.FirstOrDefault(x => x.JobId == e.JobId);
             var view = new QueueItemView { Snapshot = e };
+            ApplyCapabilityFromTransferFailure(e);
             if (existing is null)
             {
                 QueueItems.Insert(0, view);
@@ -2857,8 +2865,66 @@ public partial class MainViewModel : ObservableObject
             }
 
             ClearCompletedCanceledQueueCommand.NotifyCanExecuteChanged();
-        });
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            ApplyUpdate();
+            return;
+        }
+
+        dispatcher.Invoke(ApplyUpdate);
     }
+
+    private void ApplyCapabilityFromTransferFailure(TransferJobSnapshot snapshot)
+    {
+        if (snapshot.Status != TransferJobStatus.Failed ||
+            string.IsNullOrWhiteSpace(snapshot.Message) ||
+            !snapshot.Message.Contains("AuthorizationPermissionMismatch", StringComparison.OrdinalIgnoreCase) ||
+            !IsCurrentRemoteContext(snapshot.Request))
+        {
+            return;
+        }
+
+        var current = RemoteCapability;
+        var canBrowse = current?.CanBrowse ?? true;
+        var canDownload = current?.CanDownload ?? snapshot.Request.Direction != TransferDirection.Download;
+        var canUpload = current?.CanUpload ?? snapshot.Request.Direction != TransferDirection.Upload;
+        var providerLabel = snapshot.Request.RemotePath.ProviderKind == RemoteProviderKind.AzureBlob ? "Azure Blob" : "Azure Files";
+        var contributorRole = snapshot.Request.RemotePath.ProviderKind == RemoteProviderKind.AzureBlob
+            ? "Storage Blob Data Contributor"
+            : "Storage File Data Privileged Contributor";
+
+        switch (snapshot.Request.Direction)
+        {
+            case TransferDirection.Upload:
+                canUpload = false;
+                break;
+            case TransferDirection.Download:
+                canDownload = false;
+                break;
+        }
+
+        ApplyCapability(new RemoteCapabilitySnapshot(
+            RemoteAccessState.PermissionDenied,
+            CanBrowse: canBrowse,
+            CanUpload: canUpload,
+            CanDownload: canDownload,
+            CanPlanMirror: canUpload && canDownload,
+            CanExecuteMirror: canUpload && canDownload,
+            UserMessage: $"Connected to '{snapshot.Request.RemotePath.StorageAccountName}', but this identity does not have {providerLabel} {(snapshot.Request.Direction == TransferDirection.Upload ? "upload" : "download")} permission for '{snapshot.Request.RemotePath.ShareName}'. Ask an admin to assign '{contributorRole}' if write access is intended.",
+            EvaluatedUtc: DateTimeOffset.UtcNow,
+            ErrorCode: "AuthorizationPermissionMismatch",
+            HttpStatus: 403));
+    }
+
+    private bool IsCurrentRemoteContext(TransferRequest request) =>
+        SelectedStorageAccount is not null &&
+        SelectedFileShare is not null &&
+        string.Equals(SelectedStorageAccount.Name, request.RemotePath.StorageAccountName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(SelectedFileShare.Name, request.RemotePath.ShareName, StringComparison.OrdinalIgnoreCase) &&
+        SelectedFileShare.ProviderKind == request.RemotePath.ProviderKind;
 
     private void RefreshQueueItemsFromSnapshot()
     {
@@ -3749,11 +3815,6 @@ public partial class MainViewModel : ObservableObject
 
     public sealed record DeleteBatchResult(int Total, int Deleted, int Failed);
 }
-
-
-
-
-
 
 
 
