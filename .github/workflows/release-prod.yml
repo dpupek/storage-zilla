@@ -1,6 +1,7 @@
 name: Release MSIX Prod
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -15,3 +16,4 @@ jobs:
       channel: prod
       prerelease: false
     secrets: inherit
+
