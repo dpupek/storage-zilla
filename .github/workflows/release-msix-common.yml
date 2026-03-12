@@ -249,6 +249,7 @@ jobs:
 
           $msbuildArgs = @(
             "installer/StorageZilla.Package/StorageZilla.Package.wapproj"
+            "/restore"
             "/p:Configuration=Release"
             "/p:Platform=x64"
             "/p:AppxBundle=Never"
