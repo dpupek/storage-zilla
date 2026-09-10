@@ -150,11 +150,13 @@
 ### Phase 13 acceptance and release gates
 Implementation and automated validation are complete: 116 offline tests passed (2 live definitions skipped), and 6 separately enabled live cases passed across Azure Files and Blob. Details and security-scan limitations are recorded in [the review handoff](review-fixes.md#commit-handoff).
 
-- [ ] Verify actual desktop close/reopen and resume, cancel/purge cleanup, and existing-destination preservation.
-- [x] Complete Semgrep/Gitleaks scans and open [draft PR #19](https://github.com/dpupek/storage-zilla/pull/19) against `dev`. No findings; Semgrep has primary-constructor parsing warnings in two test files, recorded in the handoff.
+- [x] Verify actual desktop close/reopen and resume, paused-download cancel/purge cleanup, and existing-destination preservation. SHA-256 matched for the 64 MiB payload; the remote test directory was removed and original settings restored.
+- [x] Complete Semgrep/Gitleaks scans and open [PR #19](https://github.com/dpupek/storage-zilla/pull/19) against `dev`. No findings; Semgrep has primary-constructor parsing warnings in two test files, recorded in the handoff.
 - [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed on implementation commit `74e7b3d`.
 - [ ] Promote to `beta` and smoke-test generated MSI/MSIX install and upgrade behavior.
 - [ ] Promote validated beta changes to `main` for stable release.
+
+Follow-up from desktop acceptance: preserve queue row identity and selection during progress refresh. The baseline also recreates all rows; current live cancellation validation used Pause All before selecting and canceling the partial job.
 
 ## Questions and Decisions
 - Review remediation: [transfer recovery fixes and validation](review-fixes.md) records the checkpoint, cleanup, and CI fixes plus the scoped scratch-management policy.
