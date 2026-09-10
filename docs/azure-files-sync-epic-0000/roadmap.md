@@ -151,7 +151,8 @@
 Implementation and automated validation are complete: 116 offline tests passed (2 live definitions skipped), and 6 separately enabled live cases passed across Azure Files and Blob. Details and security-scan limitations are recorded in [the review handoff](review-fixes.md#commit-handoff).
 
 - [ ] Verify actual desktop close/reopen and resume, cancel/purge cleanup, and existing-destination preservation.
-- [ ] Complete Semgrep/Gitleaks scans, push the feature branch, open a PR to `dev`, and verify hosted Windows CI.
+- [x] Complete Semgrep/Gitleaks scans and open [draft PR #19](https://github.com/dpupek/storage-zilla/pull/19) against `dev`. No findings; Semgrep has primary-constructor parsing warnings in two test files, recorded in the handoff.
+- [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed on implementation commit `74e7b3d`.
 - [ ] Promote to `beta` and smoke-test generated MSI/MSIX install and upgrade behavior.
 - [ ] Promote validated beta changes to `main` for stable release.
 

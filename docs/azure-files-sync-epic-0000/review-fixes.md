@@ -56,11 +56,15 @@
 - Implementation and automated storage validation are complete. The roadmap below separates the remaining desktop acceptance and release gates.
 - Final command: `dotnet test AzureFilesSync.slnx -c Release --no-restore` succeeded, rebuilding the affected projects with no reported warnings or errors.
 - Dependency audit: `dotnet list AzureFilesSync.slnx package --vulnerable --include-transitive --no-restore --format json` succeeded for all six projects and reported no known vulnerabilities, including transitive packages.
-- Security gate policy: **warn-only**. Dependency findings: 0 at every severity. Code and secret findings: unknown because Semgrep and Gitleaks were unavailable on PATH; this is not a clean scan result. Install Semgrep (`pip install semgrep`) and a platform Gitleaks package, verify `semgrep --version` / `gitleaks version`, then scan the change set before merge.
+- Security gate policy: **warn-only**. NuGet reported no known vulnerabilities. Gitleaks 8.30.1 scanned `origin/dev..HEAD` (the implementation commit) with redaction and found no secrets. Semgrep 1.176.1 ran 32 applicable OWASP/C# rules on all 19 changed C# files and found no issues. It reported partial-parsing warnings in the two new integration test files for primary-constructor syntax (about 99.9% of lines parsed); no production file had a parsing warning. Those helper declarations were also inspected manually. This limitation keeps the security disposition at **warn**, rather than claiming complete parser coverage.
+- Scanner tools and reports are local scratch artifacts under `.tmp/security-tools`. The Gitleaks release archive was verified against its published SHA-256 checksum. Semgrep's native entry point stalled; the supported Python entry point completed using official registry rules downloaded through PowerShell, with metrics and version checks disabled. No source or findings were uploaded to Semgrep.
 - No external case was updated: the roadmap uses temporary child identifiers and supplies no explicit tracker destination for this work.
+- Created the missing `dev` branch from existing `main` commit `c180297`, pushed the feature branch, and opened [draft PR #19](https://github.com/dpupek/storage-zilla/pull/19). The PR remains draft pending desktop acceptance.
+- Desktop automation could enumerate the running Release app but failed to resolve its window on both attempts: `window id 35455300 no longer belongs to ...; current owner is ...` (both owner strings identified Storage Zilla). The app was left running; no desktop close/reopen or cancel/purge pass is claimed.
 
 ### Next acceptance and release steps
 - [ ] Exercise actual WPF close/reopen and explicit resume, plus cancel/purge cleanup and destination preservation. Live tests reopen persistence and executor instances but do not terminate and restart the desktop process.
-- [ ] Complete the missing code and secret scans, push the branch, open a PR targeting `dev`, and verify hosted Windows CI.
+- [x] Complete code and secret scans (with the parser limitation above), push the branch, and open a PR targeting `dev`.
+- [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed restore, NuGet audit, Release build, and tests for implementation commit `74e7b3d`.
 - [ ] Promote accepted changes to `beta` and smoke-test the generated MSI/MSIX install and upgrade paths.
 - [ ] Promote the validated beta to `main` through the documented release process.
