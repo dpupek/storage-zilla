@@ -112,6 +112,55 @@ public sealed class MainWindowAndViewModelUiTests
     }
 
     [Fact]
+    public void MainViewModel_Constructor_ShowsRecoveredQueueItems()
+    {
+        #region Arrange
+        var queue = new SpyTransferQueueService();
+        var recovered = new TransferJobSnapshot(
+            Guid.NewGuid(),
+            new TransferRequest(
+                TransferDirection.Download,
+                @"C:\downloads\file.txt",
+                new SharePath("storage", "share", "file.txt")),
+            TransferJobStatus.Paused,
+            50,
+            100,
+            "Recovered after restart. Resume this transfer when ready.",
+            0);
+        queue.SnapshotItems.Add(recovered);
+        #endregion
+
+        #region Initial Assert
+        Assert.Single(queue.SnapshotItems);
+        #endregion
+
+        #region Act
+        var viewModel = CreateViewModelWithDependencies(
+            new StubAuthenticationService(),
+            new StubDiscoveryService(),
+            null,
+            new StubLocalBrowserService(),
+            new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(),
+            new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(),
+            new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, returnsResult: true),
+            queue,
+            new StubMirrorPlannerService(),
+            new StubMirrorExecutionService(),
+            new InMemoryConnectionProfileStore(),
+            new StubRemoteCapabilityService(),
+            new StubRemoteActionPolicyService());
+        #endregion
+
+        #region Assert
+        var item = Assert.Single(viewModel.QueueItems);
+        Assert.Equal(recovered.JobId, item.Snapshot.JobId);
+        Assert.Equal(TransferJobStatus.Paused, item.Snapshot.Status);
+        #endregion
+    }
+
+    [Fact]
     public async Task MainViewModel_RemotePermissionDenied_DisablesRemoteCommands_AndShowsInfoMessage()
     {
         #region Arrange

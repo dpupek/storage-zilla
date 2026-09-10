@@ -74,7 +74,10 @@ public sealed class PersistenceIntegrationTests : IDisposable
             new SharePath("storage-1", "share-1", "file.txt"),
             1024,
             512,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            "source-version-1",
+            @"C:\work\.file.txt.partial",
+            [new TransferRangeCheckpoint(0, 512)]);
         #endregion
 
         #region Initial Assert
@@ -94,7 +97,72 @@ public sealed class PersistenceIntegrationTests : IDisposable
         Assert.Equal(expected.JobId, loaded!.JobId);
         Assert.Equal(expected.TotalBytes, loaded.TotalBytes);
         Assert.Equal(expected.NextOffset, loaded.NextOffset);
+        Assert.Equal(expected.SourceVersion, loaded.SourceVersion);
+        Assert.Equal(expected.StagingPath, loaded.StagingPath);
+        Assert.Equal(expected.CompletedRanges, loaded.CompletedRanges);
         Assert.Null(afterDelete);
+        #endregion
+    }
+
+    [Fact]
+    public void TransferJobStore_RoundTripsJobAcrossStoreInstances()
+    {
+        #region Arrange
+        var jobRoot = Path.Combine(_tempRoot, "transfer-jobs");
+        var jobId = Guid.NewGuid();
+        var expected = new TransferJobSnapshot(
+            jobId,
+            new TransferRequest(
+                TransferDirection.Download,
+                Path.Combine(_tempRoot, "file.txt"),
+                new SharePath("storage-1", "share-1", "file.txt")),
+            TransferJobStatus.Paused,
+            512,
+            1024,
+            "Paused",
+            1);
+        var writer = new FileTransferJobStore(jobRoot);
+        #endregion
+
+        #region Initial Assert
+        Assert.Empty(writer.Load());
+        #endregion
+
+        #region Act
+        writer.Save(expected);
+        var reader = new FileTransferJobStore(jobRoot);
+        var actual = Assert.Single(reader.Load());
+        #endregion
+
+        #region Assert
+        Assert.Equal(expected, actual);
+        Assert.Equal(jobId, actual.JobId);
+        #endregion
+    }
+
+    [Fact]
+    public async Task ProtectedDownloadFile_KeepsExistingDestinationUntilCommit_ThenReplacesIt()
+    {
+        #region Arrange
+        var destinationPath = Path.Combine(_tempRoot, "protected.txt");
+        var jobId = Guid.NewGuid();
+        var stagingPath = ProtectedDownloadFile.GetStagingPath(destinationPath, jobId);
+        await File.WriteAllTextAsync(destinationPath, "original");
+        await File.WriteAllTextAsync(stagingPath, "complete download");
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("original", await File.ReadAllTextAsync(destinationPath));
+        Assert.Equal("complete download", await File.ReadAllTextAsync(stagingPath));
+        #endregion
+
+        #region Act
+        ProtectedDownloadFile.Commit(stagingPath, destinationPath);
+        #endregion
+
+        #region Assert
+        Assert.Equal("complete download", await File.ReadAllTextAsync(destinationPath));
+        Assert.False(File.Exists(stagingPath));
         #endregion
     }
 

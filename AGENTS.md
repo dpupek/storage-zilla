@@ -74,6 +74,8 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
   - periodic progress (`ScannedEntries`, `ScannedDirectories`, completion/cancel outcome)
 - Store temporary scratch artifacts (downloaded logs, throwaway exports, ad hoc diagnostics) in the repo-local `.tmp/` folder.
 - Do not leave temp files at repo root; clean up `.tmp/` entries when no longer needed.
+- Agents may automatically create, update, move, and delete disposable scratch artifacts within this repository's `.tmp/` without further confirmation. Preserve artifacts still used by running tasks.
+- For cleanup, use `scripts/Remove-RepoTemp.ps1 -RelativePath <path-inside-.tmp>`. It validates the absolute boundary and refuses reparse points, wildcards, alternate data streams, and the `.tmp` root itself. Never follow a junction or symlink outside `.tmp`, or use this authorization to remove source files or other directories.
 
 ## Testing Conventions
 - Use AAAA style in tests:

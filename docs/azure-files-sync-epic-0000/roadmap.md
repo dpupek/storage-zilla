@@ -134,7 +134,33 @@
 - [x] Fix open-failure cleanup by rolling back temp file/watcher/session when local launch fails.
 - [x] Add integration tests for open failure cleanup and dirty-hint-only no-change path.
 - [x] Add UI regression test for refocus path when no pending remote edit changes.
+
+## Phase 13: Durable Transfer Recovery + PR Validation (child-0012)
+- [x] Persist transfer queue records so queued and in-progress work survives application restart.
+- [x] Restore interrupted transfers as paused work that requires an explicit resume or queue run.
+- [x] Bind checkpoints to the source version and discard stale checkpoints when source content changes.
+- [x] Checkpoint completed Azure Files ranges and Blob staged blocks so parallel uploads and downloads can continue after interruption.
+- [x] Resume Azure Files and Blob downloads through same-directory partial files.
+- [x] Preserve an existing local destination until the completed download passes source/version and hash checks.
+- [x] Write checkpoint and queue-state files through atomic replacement to avoid torn persistence records.
+- [x] Add focused recovery-policy, queue-restart, persistence, and destination-protection regression coverage.
+- [x] Add Windows build, package audit, and test CI for pull requests and pushes to `dev`.
+- [x] Update all currently referenced NuGet packages to the latest versions reported by NuGet.org.
+
+### Phase 13 acceptance and release gates
+Implementation and automated validation are complete: 116 offline tests passed (2 live definitions skipped), and 6 separately enabled live cases passed across Azure Files and Blob. Details and security-scan limitations are recorded in [the review handoff](review-fixes.md#commit-handoff).
+
+- [x] Verify actual desktop close/reopen and resume, paused-download cancel/purge cleanup, and existing-destination preservation. SHA-256 matched for the 64 MiB payload; the remote test directory was removed and original settings restored.
+- [x] Complete Semgrep/Gitleaks scans and open [PR #19](https://github.com/dpupek/storage-zilla/pull/19) against `dev`. No findings; Semgrep has primary-constructor parsing warnings in two test files, recorded in the handoff.
+- [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed on implementation commit `74e7b3d`.
+- [ ] Promote to `beta` and smoke-test generated MSI/MSIX install and upgrade behavior.
+- [ ] Promote validated beta changes to `main` for stable release.
+
+Follow-up from desktop acceptance: preserve queue row identity and selection during progress refresh. The baseline also recreates all rows; current live cancellation validation used Pause All before selecting and canceling the partial job.
+
 ## Questions and Decisions
+- Review remediation: [transfer recovery fixes and validation](review-fixes.md) records the checkpoint, cleanup, and CI fixes plus the scoped scratch-management policy.
+- Live transfer validation completed on `nexportdevstorage`: 3 Azure Files and 3 Blob cases passed, SHA-256 integrity matched, temporary test paths were cleaned, and the user-approved temporary Blob role assignment was removed.
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.
 

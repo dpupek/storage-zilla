@@ -33,6 +33,16 @@ Run desktop:
 dotnet run --project src/AzureFilesSync.Desktop/AzureFilesSync.Desktop.csproj -c Debug
 ```
 
+Pull requests targeting `dev`, `beta`, or `main` run the Windows build/test workflow in `.github/workflows/ci.yml`. Pushes to `dev` run the same validation, including a transitive NuGet vulnerability audit.
+
+CI fetches full Git history so Nerdbank.GitVersioning can calculate version height. Offline transfer regressions exercise the real Azure SDK/executor through an injected HTTP transport, plus buffered checkpoint ordering and cancel/purge file lifecycle.
+
+Agents may automatically manage disposable artifacts under this repository's `.tmp/`. Use `scripts/Remove-RepoTemp.ps1 -RelativePath <path-inside-.tmp>` for cleanup (`-WhatIf` previews it). The helper rejects paths outside `.tmp`, reparse points, and ambiguous Windows path syntax. Validate it with `scripts/Test-RepoTempCleanup.ps1`. The local Codex allow rule permits only this helper's absolute `pwsh -NoProfile -File` invocation; Codex loads persisted rules at startup ([rules documentation](https://learn.chatgpt.com/docs/agent-configuration/rules)).
+
+Live Azure storage tests require an authenticated Azure CLI identity with data-plane access. Set `AFS_LIVE_ENABLED=true`, `AFS_LIVE_STORAGE_ACCOUNT`, and `AFS_LIVE_SHARE` (share or container name). `AFS_LIVE_PROVIDER` defaults to `AzureFiles`; use `AzureBlob` to test Blob storage. Optionally set `AFS_LIVE_PREFIX` to an existing parent folder. Disabled tests report as skipped, and enabling tests without an account/root fails configuration validation.
+
+Run `dotnet test tests/AzureFilesSync.IntegrationTests/AzureFilesSync.IntegrationTests.csproj -c Release --filter FullyQualifiedName~LiveAzureStorageIntegrationTests`. The three enabled cases exercise multi-chunk upload/download, interruption after a persisted checkpoint, resumption through a fresh checkpoint store/executor, preservation of an existing destination, and restarting uploads when their local source changes. SHA-256 verifies downloaded content. Each case uses a unique `storage-zilla-live-*` remote directory/prefix and cleans its test file and directory in `finally`; local scratch stays under `.tmp/live-azure-*`. Test helpers use the same Azure Files OAuth backup intent as the executor.
+
 ## Installer and Release Pipeline
 - Packaging project: `installer/StorageZilla.Package/StorageZilla.Package.wapproj`
 - Beta workflow: `.github/workflows/release-beta.yml` (`push` to `beta`)
