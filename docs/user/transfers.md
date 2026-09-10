@@ -1,5 +1,7 @@
 # Transfers
 
+Downloads are written to a temporary file in the destination folder. An existing destination file remains unchanged until the remote source is confirmed unchanged, available integrity checks pass, and the download is complete. Storage Zilla then replaces the destination in one filesystem move.
+
 This page covers upload and download workflows across Azure File Shares and Blob Containers, including conflict behavior.
 
 ## Upload Workflow

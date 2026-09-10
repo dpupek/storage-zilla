@@ -1,14 +1,17 @@
 using System.Security.Cryptography;
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 using Azure;
-using Azure.Storage;
+using Azure.Core.Pipeline;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
 using Azure.Storage.Files.Shares;
 using Azure.Storage.Files.Shares.Models;
 using AzureFilesSync.Core.Contracts;
 using AzureFilesSync.Core.Models;
+using AzureFilesSync.Core.Services;
 using AzureFilesSync.Infrastructure.Config;
 
 namespace AzureFilesSync.Infrastructure.Transfers;
@@ -21,12 +24,15 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
     private readonly IAuthenticationService _authenticationService;
     private readonly ICheckpointStore _checkpointStore;
     private readonly AzureClientOptions _options;
+    private readonly HttpPipelineTransport? _transport;
 
-    public AzureFileTransferExecutor(IAuthenticationService authenticationService, ICheckpointStore checkpointStore, AzureClientOptions options)
+    public AzureFileTransferExecutor(IAuthenticationService authenticationService, ICheckpointStore checkpointStore, AzureClientOptions options,
+        HttpPipelineTransport? transport = null)
     {
         _authenticationService = authenticationService;
         _checkpointStore = checkpointStore;
         _options = options;
+        _transport = transport;
     }
 
     public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken)
@@ -44,6 +50,16 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         return GetRemoteLengthAsync(request, cancellationToken);
     }
 
+    public Task CleanupAsync(Guid jobId, TransferRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (request.Direction == TransferDirection.Download)
+        {
+            ProtectedDownloadFile.Reset(ProtectedDownloadFile.GetStagingPath(request.LocalPath, jobId));
+        }
+        return Task.CompletedTask;
+    }
+
     public async Task ExecuteAsync(
         Guid jobId,
         TransferRequest request,
@@ -53,7 +69,7 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
     {
         if (request.RemotePath.ProviderKind == RemoteProviderKind.AzureBlob)
         {
-            await ExecuteBlobTransferAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+            await ExecuteBlobTransferAsync(jobId, request, checkpoint, progress, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -70,67 +86,129 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
     private async Task ExecuteBlobTransferAsync(
         Guid jobId,
         TransferRequest request,
+        TransferCheckpoint? checkpoint,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
         if (request.Direction == TransferDirection.Upload)
         {
-            await UploadBlobAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+            await UploadBlobAsync(jobId, request, checkpoint, progress, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            await DownloadBlobAsync(jobId, request, progress, cancellationToken).ConfigureAwait(false);
+            await DownloadBlobAsync(jobId, request, checkpoint, progress, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task UploadBlobAsync(
         Guid jobId,
         TransferRequest request,
+        TransferCheckpoint? checkpoint,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
         var fileInfo = new FileInfo(request.LocalPath);
         var totalBytes = fileInfo.Length;
-        var blobClient = await GetRemoteBlobClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
+        var sourceVersion = GetLocalSourceVersion(fileInfo);
+        var blockBlobClient = await GetRemoteBlockBlobClientAsync(request.RemotePath, cancellationToken).ConfigureAwait(false);
         if (request.ConflictPolicy == TransferConflictPolicy.Ask &&
-            await blobClient.ExistsAsync(cancellationToken).ConfigureAwait(false))
+            await blockBlobClient.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException(UnresolvedAskConflictMessage);
         }
 
-        var uploadOptions = new BlobUploadOptions
+        var validCheckpoint = TransferCheckpointPolicy.IsUsable(
+            checkpoint,
+            request,
+            totalBytes,
+            sourceVersion,
+            stagingPath: null,
+            stagingFileExists: false);
+        if (!validCheckpoint)
         {
-            TransferOptions = new StorageTransferOptions
-            {
-                InitialTransferSize = ResolveChunkSize(request),
-                MaximumTransferSize = ResolveChunkSize(request),
-                MaximumConcurrency = ResolveConcurrency(request)
-            },
-            ProgressHandler = new Progress<long>(bytes => progress(new TransferProgress(bytes, totalBytes)))
-        };
+            await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+            checkpoint = null;
+        }
 
-        await ExecuteWithRetryAsync(
-            async () =>
+        var chunkSize = ResolveBlobChunkSize(request);
+        var ranges = BuildRanges(totalBytes, chunkSize).ToList();
+        var completedRanges = RestoreCompletedRanges(checkpoint, totalBytes, chunkSize);
+        if (completedRanges.Count > 0)
+        {
+            var availableBlocks = await GetAvailableUncommittedBlocksAsync(blockBlobClient, cancellationToken).ConfigureAwait(false);
+            completedRanges.RemoveWhere(range =>
+                !availableBlocks.TryGetValue(BuildBlockId(jobId, range.Offset), out var size) || size != range.Length);
+        }
+
+        var completedBytes = completedRanges.Sum(range => (long)range.Length);
+        progress(new TransferProgress(completedBytes, totalBytes));
+        var throttler = new TransferRateLimiter(ResolveMaxBytesPerSecond(request));
+        using var checkpointLock = new SemaphoreSlim(1, 1);
+        using var fileHandle = File.OpenHandle(
+            request.LocalPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        var parallelOptions = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = ResolveConcurrency(request)
+        };
+        var pendingRanges = ranges.Where(range => !completedRanges.Contains(range)).ToList();
+
+        await Parallel.ForEachAsync(pendingRanges, parallelOptions, async (range, ct) =>
+        {
+            var buffer = new byte[range.Length];
+            var readTotal = await ReadRangeAsync(fileHandle, buffer, range, ct).ConfigureAwait(false);
+            if (readTotal != range.Length)
             {
-                await using var input = new FileStream(
-                    request.LocalPath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    ResolveChunkSize(request),
-                    useAsync: true);
-                await blobClient.UploadAsync(input, uploadOptions, cancellationToken).ConfigureAwait(false);
-            },
+                throw new EndOfStreamException($"Expected {range.Length} bytes from the local file but read {readTotal}.");
+            }
+
+            await throttler.WaitAsync(readTotal, ct).ConfigureAwait(false);
+            var blockId = BuildBlockId(jobId, range.Offset);
+            await ExecuteWithRetryAsync(
+                async () =>
+                {
+                    await using var payload = new MemoryStream(buffer, writable: false);
+                    await blockBlobClient.StageBlockAsync(blockId, payload, cancellationToken: ct).ConfigureAwait(false);
+                },
+                ct).ConfigureAwait(false);
+
+            await checkpointLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                completedRanges.Add(range);
+                completedBytes += readTotal;
+                progress(new TransferProgress(completedBytes, totalBytes));
+                await SaveRangeCheckpointAsync(
+                    jobId,
+                    request,
+                    totalBytes,
+                    completedBytes,
+                    sourceVersion,
+                    stagingPath: null,
+                    completedRanges,
+                    ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                checkpointLock.Release();
+            }
+        }).ConfigureAwait(false);
+
+        var orderedBlockIds = ranges.Select(range => BuildBlockId(jobId, range.Offset));
+        await ExecuteWithRetryAsync(
+            () => blockBlobClient.CommitBlockListAsync(orderedBlockIds, cancellationToken: cancellationToken),
             cancellationToken).ConfigureAwait(false);
         progress(new TransferProgress(totalBytes, totalBytes));
-        await _checkpointStore.SaveAsync(
-            new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, totalBytes, DateTimeOffset.UtcNow),
-            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DownloadBlobAsync(
         Guid jobId,
         TransferRequest request,
+        TransferCheckpoint? checkpoint,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
@@ -139,6 +217,21 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             () => blobClient.GetPropertiesAsync(cancellationToken: cancellationToken),
             cancellationToken).ConfigureAwait(false);
         var totalBytes = properties.Value.ContentLength;
+        var sourceVersion = properties.Value.ETag.ToString();
+        var stagingPath = ProtectedDownloadFile.GetStagingPath(request.LocalPath, jobId);
+        var validCheckpoint = TransferCheckpointPolicy.IsUsable(
+            checkpoint,
+            request,
+            totalBytes,
+            sourceVersion,
+            stagingPath,
+            File.Exists(stagingPath));
+        if (!validCheckpoint)
+        {
+            ProtectedDownloadFile.Reset(stagingPath);
+            await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+            checkpoint = null;
+        }
 
         var directory = Path.GetDirectoryName(request.LocalPath);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -151,48 +244,99 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             throw new InvalidOperationException(UnresolvedAskConflictMessage);
         }
 
-        var downloadOptions = new BlobDownloadToOptions
-        {
-            TransferOptions = new StorageTransferOptions
-            {
-                InitialTransferSize = ResolveChunkSize(request),
-                MaximumTransferSize = ResolveChunkSize(request),
-                MaximumConcurrency = ResolveConcurrency(request)
-            },
-            ProgressHandler = new Progress<long>(bytes => progress(new TransferProgress(bytes, totalBytes)))
-        };
+        var existingLength = File.Exists(stagingPath) ? new FileInfo(stagingPath).Length : 0;
+        var offset = checkpoint is null
+            ? 0
+            : Math.Min(Math.Min(checkpoint.NextOffset, existingLength), totalBytes);
+        var chunkSize = ResolveBlobChunkSize(request);
+        var throttler = new TransferRateLimiter(ResolveMaxBytesPerSecond(request));
 
-        await ExecuteWithRetryAsync(
-            () => blobClient.DownloadToAsync(request.LocalPath, downloadOptions, cancellationToken),
-            cancellationToken).ConfigureAwait(false);
-        progress(new TransferProgress(totalBytes, totalBytes));
-        await _checkpointStore.SaveAsync(
-            new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, totalBytes, DateTimeOffset.UtcNow),
-            cancellationToken).ConfigureAwait(false);
+        await using (var output = new FileStream(
+                         stagingPath,
+                         FileMode.OpenOrCreate,
+                         FileAccess.Write,
+                         FileShare.None,
+                         chunkSize,
+                         useAsync: true))
+        {
+            output.SetLength(totalBytes);
+            while (offset < totalBytes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var rangeLength = Math.Min(chunkSize, totalBytes - offset);
+                var response = await ExecuteWithRetryAsync(
+                    () => blobClient.DownloadStreamingAsync(
+                        new BlobDownloadOptions
+                        {
+                            Range = new HttpRange(offset, rangeLength),
+                            Conditions = new BlobRequestConditions { IfMatch = properties.Value.ETag }
+                        },
+                        cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+                await using var remoteStream = response.Value.Content;
+                output.Seek(offset, SeekOrigin.Begin);
+                var startPosition = output.Position;
+                await remoteStream.CopyToAsync(output, chunkSize, cancellationToken).ConfigureAwait(false);
+                var copied = output.Position - startPosition;
+                if (copied != rangeLength)
+                {
+                    throw new EndOfStreamException($"Expected {rangeLength} bytes from the remote blob but received {copied}.");
+                }
+
+                await throttler.WaitAsync((int)rangeLength, cancellationToken).ConfigureAwait(false);
+                offset += rangeLength;
+                progress(new TransferProgress(offset, totalBytes));
+                await ProtectedDownloadFile.SaveCheckpointAsync(output, _checkpointStore,
+                    new TransferCheckpoint(
+                        jobId,
+                        request.Direction,
+                        request.LocalPath,
+                        request.RemotePath,
+                        totalBytes,
+                        offset,
+                        DateTimeOffset.UtcNow,
+                        sourceVersion,
+                        stagingPath),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         if (properties.Value.ContentHash is { Length: > 0 } remoteHash)
         {
-            var localHash = ComputeMd5(request.LocalPath);
+            var localHash = ComputeMd5(stagingPath);
             if (!localHash.SequenceEqual(remoteHash))
             {
                 throw new InvalidOperationException("Downloaded file hash does not match remote content hash.");
             }
         }
+
+        ProtectedDownloadFile.Commit(stagingPath, request.LocalPath);
     }
 
     private async Task UploadAsync(Guid jobId, TransferRequest request, TransferCheckpoint? checkpoint, Action<TransferProgress> progress, CancellationToken cancellationToken)
     {
         var fileInfo = new FileInfo(request.LocalPath);
         var totalBytes = fileInfo.Length;
-        var chunkSize = ResolveChunkSize(request);
+        var sourceVersion = GetLocalSourceVersion(fileInfo);
+        var chunkSize = ResolveFileChunkSize(request);
         var maxConcurrency = ResolveConcurrency(request);
         var maxBytesPerSecond = ResolveMaxBytesPerSecond(request);
         var throttler = new TransferRateLimiter(maxBytesPerSecond);
 
-        var offset = checkpoint?.NextOffset ?? 0;
-        if (checkpoint is not null && checkpoint.TotalBytes != totalBytes)
+        var validCheckpoint = TransferCheckpointPolicy.IsUsable(
+            checkpoint,
+            request,
+            totalBytes,
+            sourceVersion,
+            stagingPath: null,
+            stagingFileExists: false);
+        var offset = validCheckpoint ? checkpoint!.NextOffset : 0;
+        if (!validCheckpoint && checkpoint is not null)
         {
-            offset = 0;
+            await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+            checkpoint = null;
         }
 
         offset = Math.Clamp(offset, 0, totalBytes);
@@ -206,19 +350,32 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
 
         await EnsureRemoteUploadFileAsync(fileClient, totalBytes, forceCreate: offset == 0, cancellationToken).ConfigureAwait(false);
 
-        // Resume uses a linear checkpoint offset; keep resumed jobs sequential.
-        if (offset > 0)
+        var hasParallelCheckpoint = checkpoint?.CompletedRanges is { Count: > 0 };
+
+        // A linear checkpoint must resume sequentially. Parallel checkpoints retain completed ranges.
+        if (offset > 0 && !hasParallelCheckpoint)
         {
             maxConcurrency = 1;
         }
 
-        if (maxConcurrency <= 1)
+        if (maxConcurrency <= 1 && !hasParallelCheckpoint)
         {
-            await UploadSequentialAsync(jobId, request, fileClient, totalBytes, offset, chunkSize, throttler, progress, cancellationToken).ConfigureAwait(false);
+            await UploadSequentialAsync(jobId, request, fileClient, totalBytes, offset, chunkSize, sourceVersion, throttler, progress, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        await UploadParallelAsync(request, fileClient, totalBytes, chunkSize, maxConcurrency, throttler, progress, cancellationToken).ConfigureAwait(false);
+        await UploadParallelAsync(
+            jobId,
+            request,
+            checkpoint,
+            fileClient,
+            totalBytes,
+            chunkSize,
+            sourceVersion,
+            maxConcurrency,
+            throttler,
+            progress,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task UploadSequentialAsync(
@@ -228,6 +385,7 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         long totalBytes,
         long startOffset,
         int chunkSize,
+        string sourceVersion,
         TransferRateLimiter throttler,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
@@ -258,47 +416,53 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
 
             offset += read;
             progress(new TransferProgress(offset, totalBytes));
-            await _checkpointStore.SaveAsync(new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, offset, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+            await _checkpointStore.SaveAsync(
+                new TransferCheckpoint(
+                    jobId,
+                    request.Direction,
+                    request.LocalPath,
+                    request.RemotePath,
+                    totalBytes,
+                    offset,
+                    DateTimeOffset.UtcNow,
+                    sourceVersion),
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task UploadParallelAsync(
+        Guid jobId,
         TransferRequest request,
+        TransferCheckpoint? checkpoint,
         ShareFileClient fileClient,
         long totalBytes,
         int chunkSize,
+        string sourceVersion,
         int maxConcurrency,
         TransferRateLimiter throttler,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
-        long completedBytes = 0;
-        var ranges = BuildRanges(totalBytes, chunkSize);
+        var ranges = BuildRanges(totalBytes, chunkSize).ToList();
+        var completedRanges = RestoreCompletedRanges(checkpoint, totalBytes, chunkSize);
+        long completedBytes = completedRanges.Sum(range => (long)range.Length);
+        progress(new TransferProgress(completedBytes, totalBytes));
+        using var checkpointLock = new SemaphoreSlim(1, 1);
         using var fileHandle = File.OpenHandle(request.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.Asynchronous | FileOptions.SequentialScan);
         var parallelOptions = new ParallelOptions
         {
             CancellationToken = cancellationToken,
             MaxDegreeOfParallelism = maxConcurrency
         };
+        var pendingRanges = ranges.Where(range => !completedRanges.Contains(range)).ToList();
 
-        await Parallel.ForEachAsync(ranges, parallelOptions, async (range, ct) =>
+        await Parallel.ForEachAsync(pendingRanges, parallelOptions, async (range, ct) =>
         {
             var buffer = new byte[range.Length];
-            var readTotal = 0;
-            while (readTotal < range.Length)
+            var readTotal = await ReadRangeAsync(fileHandle, buffer, range, ct).ConfigureAwait(false);
+            if (readTotal != range.Length)
             {
-                var read = await RandomAccess.ReadAsync(fileHandle, buffer.AsMemory(readTotal, range.Length - readTotal), range.Offset + readTotal, ct).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    break;
-                }
-
-                readTotal += read;
-            }
-
-            if (readTotal <= 0)
-            {
-                return;
+                throw new EndOfStreamException($"Expected {range.Length} bytes from the local file but read {readTotal}.");
             }
 
             await throttler.WaitAsync(readTotal, ct).ConfigureAwait(false);
@@ -310,8 +474,26 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
                 },
                 ct).ConfigureAwait(false);
 
-            var totalDone = Interlocked.Add(ref completedBytes, readTotal);
-            progress(new TransferProgress(totalDone, totalBytes));
+            await checkpointLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                completedRanges.Add(range);
+                completedBytes += readTotal;
+                progress(new TransferProgress(completedBytes, totalBytes));
+                await SaveRangeCheckpointAsync(
+                    jobId,
+                    request,
+                    totalBytes,
+                    completedBytes,
+                    sourceVersion,
+                    stagingPath: null,
+                    completedRanges,
+                    ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                checkpointLock.Release();
+            }
         }).ConfigureAwait(false);
     }
 
@@ -323,7 +505,9 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             cancellationToken).ConfigureAwait(false);
 
         var totalBytes = properties.Value.ContentLength;
-        var chunkSize = ResolveChunkSize(request);
+        var sourceVersion = properties.Value.ETag.ToString();
+        var stagingPath = ProtectedDownloadFile.GetStagingPath(request.LocalPath, jobId);
+        var chunkSize = ResolveFileChunkSize(request);
         var maxConcurrency = ResolveConcurrency(request);
         var maxBytesPerSecond = ResolveMaxBytesPerSecond(request);
         var throttler = new TransferRateLimiter(maxBytesPerSecond);
@@ -339,33 +523,82 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             throw new InvalidOperationException(UnresolvedAskConflictMessage);
         }
 
-        var existingLength = File.Exists(request.LocalPath) ? new FileInfo(request.LocalPath).Length : 0;
+        var validCheckpoint = TransferCheckpointPolicy.IsUsable(
+            checkpoint,
+            request,
+            totalBytes,
+            sourceVersion,
+            stagingPath,
+            File.Exists(stagingPath));
+        if (!validCheckpoint)
+        {
+            ProtectedDownloadFile.Reset(stagingPath);
+            await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+            checkpoint = null;
+        }
+
+        var existingLength = File.Exists(stagingPath) ? new FileInfo(stagingPath).Length : 0;
         var checkpointOffset = checkpoint?.NextOffset ?? 0;
         var offset = checkpoint is null ? 0 : Math.Min(Math.Min(checkpointOffset, existingLength), totalBytes);
 
-        // Resume uses a linear checkpoint offset; keep resumed jobs sequential.
-        if (offset > 0)
+        var hasParallelCheckpoint = checkpoint?.CompletedRanges is { Count: > 0 };
+
+        // A linear checkpoint must resume sequentially. Parallel checkpoints retain completed ranges.
+        if (offset > 0 && !hasParallelCheckpoint)
         {
             maxConcurrency = 1;
         }
 
-        if (maxConcurrency <= 1)
+        if (maxConcurrency <= 1 && !hasParallelCheckpoint)
         {
-            await DownloadSequentialAsync(jobId, request, fileClient, totalBytes, offset, chunkSize, throttler, progress, cancellationToken).ConfigureAwait(false);
+            await DownloadSequentialAsync(
+                jobId,
+                request,
+                fileClient,
+                totalBytes,
+                offset,
+                chunkSize,
+                sourceVersion,
+                stagingPath,
+                throttler,
+                progress,
+                cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            await DownloadParallelAsync(request, fileClient, totalBytes, chunkSize, maxConcurrency, throttler, progress, cancellationToken).ConfigureAwait(false);
+            await DownloadParallelAsync(
+                jobId,
+                request,
+                checkpoint,
+                fileClient,
+                totalBytes,
+                chunkSize,
+                sourceVersion,
+                maxConcurrency,
+                stagingPath,
+                throttler,
+                progress,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var currentProperties = await ExecuteWithRetryAsync(
+            () => fileClient.GetPropertiesAsync(cancellationToken: cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        if (currentProperties.Value.ETag != properties.Value.ETag)
+        {
+            throw new InvalidOperationException("Remote file changed while it was being downloaded; the original local file was preserved.");
         }
 
         if (properties.Value.ContentHash is { Length: > 0 } remoteHash)
         {
-            var localHash = ComputeMd5(request.LocalPath);
+            var localHash = ComputeMd5(stagingPath);
             if (!localHash.SequenceEqual(remoteHash))
             {
                 throw new InvalidOperationException("Downloaded file hash does not match remote content hash.");
             }
         }
+
+        ProtectedDownloadFile.Commit(stagingPath, request.LocalPath);
     }
 
     private async Task DownloadSequentialAsync(
@@ -375,12 +608,14 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         long totalBytes,
         long startOffset,
         int chunkSize,
+        string sourceVersion,
+        string stagingPath,
         TransferRateLimiter throttler,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
         var offset = startOffset;
-        await using var output = new FileStream(request.LocalPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, chunkSize, useAsync: true);
+        await using var output = new FileStream(stagingPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, chunkSize, useAsync: true);
         output.SetLength(totalBytes);
 
         while (offset < totalBytes)
@@ -388,48 +623,77 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
             cancellationToken.ThrowIfCancellationRequested();
             var chunkLength = Math.Min(chunkSize, totalBytes - offset);
             var response = await ExecuteWithRetryAsync(
-                () => fileClient.DownloadAsync(new ShareFileDownloadOptions { Range = new HttpRange(offset, chunkLength) }, cancellationToken),
+                () => fileClient.DownloadAsync(
+                    new ShareFileDownloadOptions { Range = new HttpRange(offset, chunkLength) },
+                    cancellationToken),
                 cancellationToken).ConfigureAwait(false);
 
             await using var remoteStream = response.Value.Content;
             output.Seek(offset, SeekOrigin.Begin);
+            var startPosition = output.Position;
             await remoteStream.CopyToAsync(output, chunkSize, cancellationToken).ConfigureAwait(false);
+            var copied = output.Position - startPosition;
+            if (copied != chunkLength)
+            {
+                throw new EndOfStreamException($"Expected {chunkLength} bytes from the remote file but received {copied}.");
+            }
 
             var transferred = (int)chunkLength;
             await throttler.WaitAsync(transferred, cancellationToken).ConfigureAwait(false);
             offset += chunkLength;
             progress(new TransferProgress(offset, totalBytes));
-            await _checkpointStore.SaveAsync(new TransferCheckpoint(jobId, request.Direction, request.LocalPath, request.RemotePath, totalBytes, offset, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+            await ProtectedDownloadFile.SaveCheckpointAsync(output, _checkpointStore,
+                new TransferCheckpoint(
+                    jobId,
+                    request.Direction,
+                    request.LocalPath,
+                    request.RemotePath,
+                    totalBytes,
+                    offset,
+                    DateTimeOffset.UtcNow,
+                    sourceVersion,
+                    stagingPath),
+                cancellationToken).ConfigureAwait(false);
         }
 
         await output.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DownloadParallelAsync(
+        Guid jobId,
         TransferRequest request,
+        TransferCheckpoint? checkpoint,
         ShareFileClient fileClient,
         long totalBytes,
         int chunkSize,
+        string sourceVersion,
         int maxConcurrency,
+        string stagingPath,
         TransferRateLimiter throttler,
         Action<TransferProgress> progress,
         CancellationToken cancellationToken)
     {
-        long completedBytes = 0;
-        var ranges = BuildRanges(totalBytes, chunkSize);
-        using var outputHandle = File.OpenHandle(request.LocalPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var ranges = BuildRanges(totalBytes, chunkSize).ToList();
+        var completedRanges = RestoreCompletedRanges(checkpoint, totalBytes, chunkSize);
+        long completedBytes = completedRanges.Sum(range => (long)range.Length);
+        progress(new TransferProgress(completedBytes, totalBytes));
+        using var checkpointLock = new SemaphoreSlim(1, 1);
+        using var outputHandle = File.OpenHandle(stagingPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, FileOptions.Asynchronous | FileOptions.SequentialScan);
         RandomAccess.SetLength(outputHandle, totalBytes);
         var parallelOptions = new ParallelOptions
         {
             CancellationToken = cancellationToken,
             MaxDegreeOfParallelism = maxConcurrency
         };
+        var pendingRanges = ranges.Where(range => !completedRanges.Contains(range)).ToList();
 
-        await Parallel.ForEachAsync(ranges, parallelOptions, async (range, ct) =>
+        await Parallel.ForEachAsync(pendingRanges, parallelOptions, async (range, ct) =>
         {
             await throttler.WaitAsync(range.Length, ct).ConfigureAwait(false);
             var response = await ExecuteWithRetryAsync(
-                () => fileClient.DownloadAsync(new ShareFileDownloadOptions { Range = new HttpRange(range.Offset, range.Length) }, ct),
+                () => fileClient.DownloadAsync(
+                    new ShareFileDownloadOptions { Range = new HttpRange(range.Offset, range.Length) },
+                    ct),
                 ct).ConfigureAwait(false);
 
             await using var remoteStream = response.Value.Content;
@@ -446,14 +710,32 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
                 copied += read;
             }
 
-            if (copied <= 0)
+            if (copied != range.Length)
             {
-                return;
+                throw new EndOfStreamException($"Expected {range.Length} bytes from the remote file but received {copied}.");
             }
 
             await RandomAccess.WriteAsync(outputHandle, buffer.AsMemory(0, copied), range.Offset, ct).ConfigureAwait(false);
-            var totalDone = Interlocked.Add(ref completedBytes, copied);
-            progress(new TransferProgress(totalDone, totalBytes));
+            await checkpointLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                completedRanges.Add(range);
+                completedBytes += copied;
+                progress(new TransferProgress(completedBytes, totalBytes));
+                await SaveRangeCheckpointAsync(
+                    jobId,
+                    request,
+                    totalBytes,
+                    completedBytes,
+                    sourceVersion,
+                    stagingPath,
+                    completedRanges,
+                    ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                checkpointLock.Release();
+            }
         }).ConfigureAwait(false);
     }
 
@@ -473,13 +755,15 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
 
     private async Task<ShareFileClient> GetRemoteFileClientAsync(SharePath path, CancellationToken cancellationToken, bool ensureRemotePathForUpload = false)
     {
+        var clientOptions = new ShareClientOptions { ShareTokenIntent = ShareTokenIntent.Backup };
+        if (_transport is not null)
+        {
+            clientOptions.Transport = _transport;
+        }
         var serviceClient = new ShareServiceClient(
             new Uri($"https://{path.StorageAccountName}.file.core.windows.net"),
             _authenticationService.GetCredential(),
-            new ShareClientOptions
-            {
-                ShareTokenIntent = ShareTokenIntent.Backup
-            });
+            clientOptions);
         var shareClient = serviceClient.GetShareClient(path.ShareName);
 
         var normalized = path.NormalizeRelativePath();
@@ -509,7 +793,7 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         cancellationToken.ThrowIfCancellationRequested();
         var serviceClient = new BlobServiceClient(
             new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
-            _authenticationService.GetCredential());
+            _authenticationService.GetCredential(), GetBlobClientOptions());
         var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
         var normalized = path.NormalizeRelativePath();
         if (string.IsNullOrWhiteSpace(normalized))
@@ -518,6 +802,32 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         }
 
         return Task.FromResult(containerClient.GetBlobClient(normalized));
+    }
+
+    private Task<BlockBlobClient> GetRemoteBlockBlobClientAsync(SharePath path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var serviceClient = new BlobServiceClient(
+            new Uri($"https://{path.StorageAccountName}.blob.core.windows.net"),
+            _authenticationService.GetCredential(), GetBlobClientOptions());
+        var containerClient = serviceClient.GetBlobContainerClient(path.ShareName);
+        var normalized = path.NormalizeRelativePath();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new InvalidOperationException("Remote file path is missing a file name.");
+        }
+
+        return Task.FromResult(containerClient.GetBlockBlobClient(normalized));
+    }
+
+    private BlobClientOptions GetBlobClientOptions()
+    {
+        var options = new BlobClientOptions();
+        if (_transport is not null)
+        {
+            options.Transport = _transport;
+        }
+        return options;
     }
 
     private async Task EnsureRemoteUploadFileAsync(ShareFileClient fileClient, long fileLength, bool forceCreate, CancellationToken cancellationToken)
@@ -581,6 +891,90 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         };
     }
 
+    private async Task SaveRangeCheckpointAsync(
+        Guid jobId,
+        TransferRequest request,
+        long totalBytes,
+        long completedBytes,
+        string sourceVersion,
+        string? stagingPath,
+        HashSet<TransferRange> completedRanges,
+        CancellationToken cancellationToken)
+    {
+        var ranges = completedRanges
+            .OrderBy(range => range.Offset)
+            .Select(range => new TransferRangeCheckpoint(range.Offset, range.Length))
+            .ToList();
+        await _checkpointStore.SaveAsync(
+            new TransferCheckpoint(
+                jobId,
+                request.Direction,
+                request.LocalPath,
+                request.RemotePath,
+                totalBytes,
+                completedBytes,
+                DateTimeOffset.UtcNow,
+                sourceVersion,
+                stagingPath,
+                ranges),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static HashSet<TransferRange> RestoreCompletedRanges(
+        TransferCheckpoint? checkpoint,
+        long totalBytes,
+        int chunkSize)
+    {
+        return TransferCheckpointPolicy.GetUsableCompletedRanges(checkpoint, totalBytes, chunkSize)
+            .Select(range => new TransferRange(range.Offset, range.Length))
+            .ToHashSet();
+    }
+
+    private static async Task<int> ReadRangeAsync(
+        SafeFileHandle fileHandle,
+        byte[] buffer,
+        TransferRange range,
+        CancellationToken cancellationToken)
+    {
+        var readTotal = 0;
+        while (readTotal < range.Length)
+        {
+            var read = await RandomAccess.ReadAsync(
+                fileHandle,
+                buffer.AsMemory(readTotal, range.Length - readTotal),
+                range.Offset + readTotal,
+                cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            readTotal += read;
+        }
+
+        return readTotal;
+    }
+
+    private static string BuildBlockId(Guid jobId, long offset) =>
+        Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jobId:N}:{offset:D20}"));
+
+    private static async Task<Dictionary<string, long>> GetAvailableUncommittedBlocksAsync(
+        BlockBlobClient blockBlobClient,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await blockBlobClient.GetBlockListAsync(
+                BlockListTypes.Uncommitted,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            return response.Value.UncommittedBlocks.ToDictionary(block => block.Name, block => block.SizeLong);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return [];
+        }
+    }
+
     private static byte[] ComputeMd5(string path)
     {
         using var md5 = MD5.Create();
@@ -588,7 +982,16 @@ public sealed class AzureFileTransferExecutor : ITransferExecutor
         return md5.ComputeHash(stream);
     }
 
-    private int ResolveChunkSize(TransferRequest request)
+    private static string GetLocalSourceVersion(FileInfo fileInfo) =>
+        $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
+
+    private int ResolveFileChunkSize(TransferRequest request)
+    {
+        var requested = request.ChunkSizeBytes > 0 ? request.ChunkSizeBytes : _options.TransferChunkSizeBytes;
+        return Math.Clamp(requested, 64 * 1024, 4 * 1024 * 1024);
+    }
+
+    private int ResolveBlobChunkSize(TransferRequest request)
     {
         var requested = request.ChunkSizeBytes > 0 ? request.ChunkSizeBytes : _options.TransferChunkSizeBytes;
         return Math.Clamp(requested, 64 * 1024, 32 * 1024 * 1024);

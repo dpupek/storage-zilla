@@ -4,28 +4,53 @@ using AzureFilesSync.Core.Models;
 
 namespace AzureFilesSync.Core.Services;
 
-public sealed class TransferQueueService : ITransferQueueService
+public sealed class TransferQueueService : ITransferQueueService, IDisposable
 {
     private static readonly TransferJobStatus[] ActiveStatuses = [TransferJobStatus.Queued, TransferJobStatus.Running, TransferJobStatus.Paused];
     private readonly ITransferExecutor _executor;
     private readonly ICheckpointStore _checkpointStore;
+    private readonly ITransferJobStore _jobStore;
     private readonly ConcurrentDictionary<Guid, TransferJobState> _jobs = new();
     private readonly SemaphoreSlim _workerSignal = new(0);
     private readonly CancellationTokenSource _cts = new();
     private readonly int _workerCount;
+    private readonly List<Task> _workers = [];
     private readonly Lock _enqueueLock = new();
+    private volatile bool _shuttingDown;
+    private bool _disposed;
 
     public event EventHandler<TransferJobSnapshot>? JobUpdated;
 
-    public TransferQueueService(ITransferExecutor executor, ICheckpointStore checkpointStore, int workerCount = 3)
+    public TransferQueueService(
+        ITransferExecutor executor,
+        ICheckpointStore checkpointStore,
+        ITransferJobStore? jobStore = null,
+        int workerCount = 3)
     {
         _executor = executor;
         _checkpointStore = checkpointStore;
+        _jobStore = jobStore ?? NullTransferJobStore.Instance;
         _workerCount = Math.Max(1, workerCount);
+
+        foreach (var persisted in _jobStore.Load())
+        {
+            var recovered = persisted.Status is TransferJobStatus.Running or TransferJobStatus.Queued
+                ? persisted with
+                {
+                    Status = TransferJobStatus.Paused,
+                    Message = "Recovered after restart. Resume this transfer when ready."
+                }
+                : persisted;
+            _jobs[recovered.JobId] = new TransferJobState(recovered)
+            {
+                HoldUntilStarted = recovered.Status == TransferJobStatus.Paused
+            };
+            _jobStore.Save(recovered);
+        }
 
         for (var i = 0; i < _workerCount; i++)
         {
-            _ = Task.Run(() => WorkerLoopAsync(_cts.Token));
+            _workers.Add(Task.Run(() => WorkerLoopAsync(_cts.Token)));
         }
     }
 
@@ -217,11 +242,14 @@ public sealed class TransferQueueService : ITransferQueueService
             return;
         }
 
+        Task workerCompletion;
         await state.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            state.CancelRequested = true;
             state.PauseRequested = false;
             state.JobCancellation?.Cancel();
+            workerCompletion = state.WorkerCompletion?.Task ?? Task.CompletedTask;
             state.Snapshot = state.Snapshot with { Status = TransferJobStatus.Canceled, Message = "Canceled by user." };
             Publish(state.Snapshot);
         }
@@ -230,7 +258,17 @@ public sealed class TransferQueueService : ITransferQueueService
             state.Lock.Release();
         }
 
-        await _checkpointStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+        // Once cancellation is accepted, finish cleanup even if the caller goes away.
+        await workerCompletion.ConfigureAwait(false);
+        await state.Lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            await DiscardArtifactsAsync(state.Snapshot, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            state.Lock.Release();
+        }
     }
 
     public async Task<int> PurgeAsync(IReadOnlyCollection<TransferJobStatus> statuses, CancellationToken cancellationToken)
@@ -246,16 +284,30 @@ public sealed class TransferQueueService : ITransferQueueService
         foreach (var pair in _jobs.ToArray())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var snapshot = pair.Value.Snapshot;
-            if (!statusSet.Contains(snapshot.Status))
+            var state = pair.Value;
+            if (!statusSet.Contains(state.Snapshot.Status) || ActiveStatuses.Contains(state.Snapshot.Status))
             {
                 continue;
             }
-
-            if (_jobs.TryRemove(pair.Key, out _))
+            await (state.WorkerCompletion?.Task ?? Task.CompletedTask).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await state.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                removed++;
-                await _checkpointStore.DeleteAsync(pair.Key, cancellationToken).ConfigureAwait(false);
+                var snapshot = state.Snapshot;
+                if (!statusSet.Contains(snapshot.Status) || ActiveStatuses.Contains(snapshot.Status))
+                {
+                    continue;
+                }
+                await DiscardArtifactsAsync(snapshot, cancellationToken).ConfigureAwait(false);
+                _jobStore.Delete(pair.Key);
+                if (_jobs.TryRemove(pair.Key, out _))
+                {
+                    removed++;
+                }
+            }
+            finally
+            {
+                state.Lock.Release();
             }
         }
 
@@ -263,6 +315,45 @@ public sealed class TransferQueueService : ITransferQueueService
     }
 
     public IReadOnlyList<TransferJobSnapshot> Snapshot() => _jobs.Values.Select(x => x.Snapshot).OrderBy(x => x.Status).ToList();
+
+    private async Task DiscardArtifactsAsync(TransferJobSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        await _executor.CleanupAsync(snapshot.JobId, snapshot.Request, cancellationToken).ConfigureAwait(false);
+        await _checkpointStore.DeleteAsync(snapshot.JobId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        lock (_enqueueLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _shuttingDown = true;
+            _cts.Cancel();
+        }
+
+        var stopped = false;
+        try
+        {
+            stopped = Task.WaitAll(_workers.ToArray(), TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException))
+        {
+            stopped = true;
+        }
+        finally
+        {
+            if (stopped)
+            {
+                _cts.Dispose();
+                _workerSignal.Dispose();
+            }
+        }
+    }
 
     private async Task WorkerLoopAsync(CancellationToken cancellationToken)
     {
@@ -288,6 +379,7 @@ public sealed class TransferQueueService : ITransferQueueService
             try
             {
                 next.JobCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                next.CancelRequested = false;
                 next.PauseRequested = false;
                 transferCancellation = next.JobCancellation.Token;
                 next.Snapshot = next.Snapshot with { Status = TransferJobStatus.Running, Message = null };
@@ -299,6 +391,7 @@ public sealed class TransferQueueService : ITransferQueueService
                 next.JobCancellation?.Dispose();
                 next.JobCancellation = null;
                 claimedLockReleased = true;
+                next.WorkerCompletion?.TrySetResult();
                 next.Lock.Release();
                 return;
             }
@@ -309,6 +402,7 @@ public sealed class TransferQueueService : ITransferQueueService
                 next.JobCancellation?.Dispose();
                 next.JobCancellation = null;
                 claimedLockReleased = true;
+                next.WorkerCompletion?.TrySetResult();
                 next.Lock.Release();
                 continue;
             }
@@ -324,6 +418,7 @@ public sealed class TransferQueueService : ITransferQueueService
                 next.JobCancellation?.Dispose();
                 next.JobCancellation = null;
                 claimedLockReleased = true;
+                next.WorkerCompletion?.TrySetResult();
                 next.Lock.Release();
                 continue;
             }
@@ -339,6 +434,7 @@ public sealed class TransferQueueService : ITransferQueueService
             try
             {
                 var totalBytes = await _executor.EstimateSizeAsync(runningSnapshot.Request, transferCancellation).ConfigureAwait(false);
+                transferCancellation.ThrowIfCancellationRequested();
                 runningSnapshot = runningSnapshot with { TotalBytes = totalBytes };
                 next.Snapshot = runningSnapshot;
                 Publish(runningSnapshot);
@@ -346,6 +442,10 @@ public sealed class TransferQueueService : ITransferQueueService
                 var checkpoint = await _checkpointStore.LoadAsync(runningSnapshot.JobId, transferCancellation).ConfigureAwait(false);
                 await _executor.ExecuteAsync(runningSnapshot.JobId, runningSnapshot.Request, checkpoint, progress =>
                 {
+                    if (next.CancelRequested)
+                    {
+                        return;
+                    }
                     var updated = runningSnapshot with
                     {
                         BytesTransferred = progress.BytesTransferred,
@@ -357,6 +457,7 @@ public sealed class TransferQueueService : ITransferQueueService
                     Publish(updated);
                 }, transferCancellation).ConfigureAwait(false);
 
+                transferCancellation.ThrowIfCancellationRequested();
                 next.Snapshot = runningSnapshot with { Status = TransferJobStatus.Completed, BytesTransferred = runningSnapshot.TotalBytes, Message = "Completed" };
                 await _checkpointStore.DeleteAsync(runningSnapshot.JobId, transferCancellation).ConfigureAwait(false);
                 Publish(next.Snapshot);
@@ -366,7 +467,17 @@ public sealed class TransferQueueService : ITransferQueueService
                 await next.Lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
                 try
                 {
-                    if (next.PauseRequested)
+                    if (next.CancelRequested)
+                    {
+                        next.Snapshot = runningSnapshot with { Status = TransferJobStatus.Canceled, Message = "Canceled by user." };
+                        Publish(next.Snapshot);
+                    }
+                    else if (_shuttingDown)
+                    {
+                        next.Snapshot = runningSnapshot with { Status = TransferJobStatus.Paused, Message = "Paused during application shutdown." };
+                        Publish(next.Snapshot);
+                    }
+                    else if (next.PauseRequested)
                     {
                         next.Snapshot = runningSnapshot with { Status = TransferJobStatus.Paused, Message = "Paused" };
                         Publish(next.Snapshot);
@@ -387,8 +498,8 @@ public sealed class TransferQueueService : ITransferQueueService
                 var isUnresolvedAskConflict = ex.Message.Contains("Ask policy was unresolved", StringComparison.OrdinalIgnoreCase);
                 next.Snapshot = runningSnapshot with
                 {
-                    Status = isUnresolvedAskConflict ? TransferJobStatus.Canceled : TransferJobStatus.Failed,
-                    Message = ex.Message
+                    Status = next.CancelRequested || isUnresolvedAskConflict ? TransferJobStatus.Canceled : TransferJobStatus.Failed,
+                    Message = next.CancelRequested ? "Canceled by user." : ex.Message
                 };
                 Publish(next.Snapshot);
             }
@@ -402,6 +513,11 @@ public sealed class TransferQueueService : ITransferQueueService
                 }
                 finally
                 {
+                    next.WorkerCompletion?.TrySetResult();
+                    if (next.Snapshot.Status == TransferJobStatus.Queued)
+                    {
+                        _workerSignal.Release();
+                    }
                     next.Lock.Release();
                 }
             }
@@ -417,8 +533,9 @@ public sealed class TransferQueueService : ITransferQueueService
                 continue;
             }
 
-            if (state.Snapshot.Status == TransferJobStatus.Queued)
+            if (state.Snapshot.Status == TransferJobStatus.Queued && state.WorkerCompletion?.Task.IsCompleted != false)
             {
+                state.WorkerCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 next = state;
                 return true;
             }
@@ -430,7 +547,11 @@ public sealed class TransferQueueService : ITransferQueueService
         return false;
     }
 
-    private void Publish(TransferJobSnapshot snapshot) => JobUpdated?.Invoke(this, snapshot);
+    private void Publish(TransferJobSnapshot snapshot)
+    {
+        _jobStore.Save(snapshot);
+        JobUpdated?.Invoke(this, snapshot);
+    }
 
     private static string BuildTransferKey(TransferRequest request)
     {
@@ -463,7 +584,18 @@ public sealed class TransferQueueService : ITransferQueueService
         public SemaphoreSlim Lock { get; } = new(1, 1);
         public TransferJobSnapshot Snapshot { get; set; }
         public CancellationTokenSource? JobCancellation { get; set; }
+        public TaskCompletionSource? WorkerCompletion { get; set; }
+        public volatile bool CancelRequested;
         public bool PauseRequested { get; set; }
         public bool HoldUntilStarted { get; set; }
+    }
+
+    private sealed class NullTransferJobStore : ITransferJobStore
+    {
+        public static NullTransferJobStore Instance { get; } = new();
+
+        public IReadOnlyList<TransferJobSnapshot> Load() => [];
+        public void Save(TransferJobSnapshot snapshot) { }
+        public void Delete(Guid jobId) { }
     }
 }

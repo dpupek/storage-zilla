@@ -1,0 +1,50 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+      - beta
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore AzureFilesSync.slnx -r win-x64
+
+      - name: Audit NuGet packages
+        shell: pwsh
+        run: dotnet list AzureFilesSync.slnx package --vulnerable --include-transitive --no-restore
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build AzureFilesSync.slnx -c Release --no-restore
+
+      - name: Test
+        shell: pwsh
+        run: dotnet test AzureFilesSync.slnx -c Release --no-build

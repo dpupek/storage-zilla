@@ -48,6 +48,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILocalFileOperationsService, LocalFileOperationsService>();
         services.AddSingleton<IConnectionProfileStore, FileConnectionProfileStore>();
         services.AddSingleton<ICheckpointStore, FileCheckpointStore>();
+        services.AddSingleton<ITransferJobStore, FileTransferJobStore>();
         services.AddSingleton<ITransferConflictProbeService, TransferConflictProbeService>();
         services.AddSingleton<ITransferExecutor, AzureFileTransferExecutor>();
         services.AddSingleton<ITransferQueueService, TransferQueueService>();
@@ -60,6 +61,5 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
-
 
 

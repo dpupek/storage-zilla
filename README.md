@@ -13,6 +13,7 @@ Core capabilities:
 - Provider-inferred remote operations (Files and Blob work through the same UX)
 - Recursive remote search with scope selection, cancel, and incremental results
 - Queue-based upload/download with conflict policies
+- Restart-safe transfer recovery and protected local download replacement
 - Operational safety checks and permission-aware UX
 - Signed MSIX release pipelines for beta/prod channels and in-app update checks
 

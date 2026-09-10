@@ -1,5 +1,15 @@
 # Queue Management
 
+## Restart recovery
+
+Storage Zilla saves queue state as it changes. If the app closes while work is queued or running, that work appears as paused after the next start. Review the recovered items, then use **Resume** or **Run Queue** when the remote account and local paths are ready.
+
+Partially downloaded Azure Files and Blob files are kept beside the selected destination with a `.partial` suffix. Storage Zilla resumes only when that partial file and its checkpoint still match the same remote source version. If the source changed, it safely starts the download again.
+
+Pausing or a failed transfer retains its partial download for recovery. Canceling waits for the transfer to stop, then removes its partial file and checkpoint. Clearing terminal queue items also removes any remaining partial files belonging to those items. The destination and other jobs' partial files are preserved.
+
+Uploads also retain completed Azure Files ranges or staged Azure Blob blocks. Recovery reuses only chunks that still match the queued source and the current remote staging state.
+
 The queue is the control center for all transfer execution.
 
 ## Queue Columns

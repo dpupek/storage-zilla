@@ -409,12 +409,92 @@ public sealed class TransferQueueServiceTests
         #endregion
     }
 
+    [Fact]
+    public async Task Constructor_RecoversInterruptedJobAsPaused_AndResumeCompletesSameJob()
+    {
+        #region Arrange
+        var executor = new StubTransferExecutor();
+        var checkpoints = new InMemoryCheckpointStore();
+        var jobId = Guid.NewGuid();
+        var request = new TransferRequest(
+            TransferDirection.Download,
+            @"C:\downloads\file.txt",
+            new SharePath("acct", "share", "file.txt"));
+        var persisted = new TransferJobSnapshot(
+            jobId,
+            request,
+            TransferJobStatus.Running,
+            50,
+            100,
+            null,
+            0);
+        var jobs = new InMemoryTransferJobStore(persisted);
+        var queue = new TransferQueueService(executor, checkpoints, jobs, workerCount: 1);
+        #endregion
+
+        #region Initial Assert
+        var recovered = Assert.Single(queue.Snapshot());
+        Assert.Equal(jobId, recovered.JobId);
+        Assert.Equal(TransferJobStatus.Paused, recovered.Status);
+        Assert.Contains("Recovered after restart", recovered.Message);
+        Assert.Equal(0, executor.ExecutionCount);
+        #endregion
+
+        #region Act
+        await queue.ResumeAsync(jobId, CancellationToken.None);
+        var completed = await WaitUntilAsync(
+            () => queue.Snapshot().Single().Status == TransferJobStatus.Completed,
+            TimeSpan.FromSeconds(5));
+        #endregion
+
+        #region Assert
+        Assert.True(completed);
+        Assert.Equal(1, executor.ExecutionCount);
+        Assert.Equal(jobId, Assert.Single(jobs.Load()).JobId);
+        Assert.Equal(TransferJobStatus.Completed, Assert.Single(jobs.Load()).Status);
+        #endregion
+    }
+
+    [Fact]
+    public async Task Dispose_PersistsRunningJobAsPausedForNextStart()
+    {
+        #region Arrange
+        var executor = new BlockingTransferExecutor();
+        var checkpoints = new InMemoryCheckpointStore();
+        var jobs = new InMemoryTransferJobStore();
+        var queue = new TransferQueueService(executor, checkpoints, jobs, workerCount: 1);
+        var jobId = queue.Enqueue(new TransferRequest(
+            TransferDirection.Upload,
+            @"C:\uploads\file.txt",
+            new SharePath("acct", "share", "file.txt")));
+        #endregion
+
+        #region Initial Assert
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TransferJobStatus.Running, Assert.Single(jobs.Load()).Status);
+        #endregion
+
+        #region Act
+        queue.Dispose();
+        #endregion
+
+        #region Assert
+        var persisted = Assert.Single(jobs.Load());
+        Assert.Equal(jobId, persisted.JobId);
+        Assert.Equal(TransferJobStatus.Paused, persisted.Status);
+        Assert.Contains("shutdown", persisted.Message, StringComparison.OrdinalIgnoreCase);
+        #endregion
+    }
+
     private sealed class StubTransferExecutor : ITransferExecutor
     {
+        public int ExecutionCount { get; private set; }
+
         public Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken) => Task.FromResult(100L);
 
         public async Task ExecuteAsync(Guid jobId, TransferRequest request, TransferCheckpoint? checkpoint, Action<TransferProgress> progress, CancellationToken cancellationToken)
         {
+            ExecutionCount++;
             await Task.Delay(20, cancellationToken);
             progress(new TransferProgress(50, 100));
             await Task.Delay(20, cancellationToken);
@@ -473,6 +553,25 @@ public sealed class TransferQueueServiceTests
             _checkpoints.Remove(jobId);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class InMemoryTransferJobStore : ITransferJobStore
+    {
+        private readonly Dictionary<Guid, TransferJobSnapshot> _jobs = [];
+
+        public InMemoryTransferJobStore(params TransferJobSnapshot[] snapshots)
+        {
+            foreach (var snapshot in snapshots)
+            {
+                _jobs[snapshot.JobId] = snapshot;
+            }
+        }
+
+        public IReadOnlyList<TransferJobSnapshot> Load() => _jobs.Values.ToList();
+
+        public void Save(TransferJobSnapshot snapshot) => _jobs[snapshot.JobId] = snapshot;
+
+        public void Delete(Guid jobId) => _jobs.Remove(jobId);
     }
 
     private sealed class ThrowingTransferExecutor : ITransferExecutor

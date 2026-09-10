@@ -134,7 +134,11 @@ public sealed class RemoteFileOperationsService : IRemoteFileOperationsService
 
         var sourcePrefix = BlobHierarchyPaths.NormalizePrefix(normalized);
         var targetPrefix = BlobHierarchyPaths.NormalizePrefix(targetPath);
-        await foreach (var blob in containerClient.GetBlobsAsync(prefix: sourcePrefix, cancellationToken: cancellationToken))
+        await foreach (var blob in containerClient.GetBlobsAsync(
+                           traits: BlobTraits.None,
+                           states: BlobStates.None,
+                           prefix: sourcePrefix,
+                           cancellationToken: cancellationToken))
         {
             var suffix = blob.Name[sourcePrefix.Length..];
             var destinationName = $"{targetPrefix}{suffix}";
@@ -158,7 +162,11 @@ public sealed class RemoteFileOperationsService : IRemoteFileOperationsService
         }
 
         var prefix = BlobHierarchyPaths.NormalizePrefix(normalized);
-        await foreach (var blob in containerClient.GetBlobsAsync(prefix: prefix, cancellationToken: cancellationToken))
+        await foreach (var blob in containerClient.GetBlobsAsync(
+                           traits: BlobTraits.None,
+                           states: BlobStates.None,
+                           prefix: prefix,
+                           cancellationToken: cancellationToken))
         {
             await containerClient.GetBlobClient(blob.Name)
                 .DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, cancellationToken: cancellationToken)

@@ -100,7 +100,12 @@ public sealed class AzureFilesBrowserService : IAzureFilesBrowserService
         var prefix = BlobHierarchyPaths.NormalizePrefix(path.NormalizeRelativePath());
 
         await foreach (Page<BlobHierarchyItem> page in containerClient
-                           .GetBlobsByHierarchyAsync(delimiter: "/", prefix: prefix, cancellationToken: cancellationToken)
+                           .GetBlobsByHierarchyAsync(
+                               traits: BlobTraits.None,
+                               states: BlobStates.None,
+                               delimiter: "/",
+                               prefix: prefix,
+                               cancellationToken: cancellationToken)
                            .AsPages(continuationToken, Math.Max(1, pageSize)))
         {
             var entries = new List<RemoteEntry>(page.Values.Count);
@@ -230,7 +235,12 @@ public sealed class AzureFilesBrowserService : IAzureFilesBrowserService
         }
 
         var prefix = BlobHierarchyPaths.NormalizePrefix(normalized);
-        await foreach (var page in containerClient.GetBlobsByHierarchyAsync(delimiter: "/", prefix: prefix, cancellationToken: cancellationToken).AsPages(default, 1))
+        await foreach (var page in containerClient.GetBlobsByHierarchyAsync(
+                           traits: BlobTraits.None,
+                           states: BlobStates.None,
+                           delimiter: "/",
+                           prefix: prefix,
+                           cancellationToken: cancellationToken).AsPages(default, 1))
         {
             if (page.Values.Any())
             {

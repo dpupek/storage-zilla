@@ -134,7 +134,30 @@
 - [x] Fix open-failure cleanup by rolling back temp file/watcher/session when local launch fails.
 - [x] Add integration tests for open failure cleanup and dirty-hint-only no-change path.
 - [x] Add UI regression test for refocus path when no pending remote edit changes.
+
+## Phase 13: Durable Transfer Recovery + PR Validation (child-0012)
+- [x] Persist transfer queue records so queued and in-progress work survives application restart.
+- [x] Restore interrupted transfers as paused work that requires an explicit resume or queue run.
+- [x] Bind checkpoints to the source version and discard stale checkpoints when source content changes.
+- [x] Checkpoint completed Azure Files ranges and Blob staged blocks so parallel uploads and downloads can continue after interruption.
+- [x] Resume Azure Files and Blob downloads through same-directory partial files.
+- [x] Preserve an existing local destination until the completed download passes source/version and hash checks.
+- [x] Write checkpoint and queue-state files through atomic replacement to avoid torn persistence records.
+- [x] Add focused recovery-policy, queue-restart, persistence, and destination-protection regression coverage.
+- [x] Add Windows build, package audit, and test CI for pull requests and pushes to `dev`.
+- [x] Update all currently referenced NuGet packages to the latest versions reported by NuGet.org.
+
+### Phase 13 acceptance and release gates
+Implementation and automated validation are complete: 116 offline tests passed (2 live definitions skipped), and 6 separately enabled live cases passed across Azure Files and Blob. Details and security-scan limitations are recorded in [the review handoff](review-fixes.md#commit-handoff).
+
+- [ ] Verify actual desktop close/reopen and resume, cancel/purge cleanup, and existing-destination preservation.
+- [ ] Complete Semgrep/Gitleaks scans, push the feature branch, open a PR to `dev`, and verify hosted Windows CI.
+- [ ] Promote to `beta` and smoke-test generated MSI/MSIX install and upgrade behavior.
+- [ ] Promote validated beta changes to `main` for stable release.
+
 ## Questions and Decisions
+- Review remediation: [transfer recovery fixes and validation](review-fixes.md) records the checkpoint, cleanup, and CI fixes plus the scoped scratch-management policy.
+- Live transfer validation completed on `nexportdevstorage`: 3 Azure Files and 3 Blob cases passed, SHA-256 integrity matched, temporary test paths were cleaned, and the user-approved temporary Blob role assignment was removed.
 - Decision: Start with temporary case id folder and map to FogBugz later.
 - Decision: Keep MVP Windows-only with WPF.
 

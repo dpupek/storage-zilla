@@ -368,6 +368,7 @@ public partial class MainViewModel : ObservableObject
         QueueItemsView = CollectionViewSource.GetDefaultView(QueueItems);
         QueueItemsView.Filter = ShouldIncludeQueueItem;
         _transferQueueService.JobUpdated += OnJobUpdated;
+        RefreshQueueItemsFromSnapshot();
         _ = LoadLocalProfileDefaultsAsync();
     }
 
@@ -3815,7 +3816,6 @@ public partial class MainViewModel : ObservableObject
 
     public sealed record DeleteBatchResult(int Total, int Deleted, int Failed);
 }
-
 
 
 

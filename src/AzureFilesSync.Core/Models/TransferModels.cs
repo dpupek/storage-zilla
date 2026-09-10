@@ -39,6 +39,8 @@ public sealed record EnqueueResult(Guid JobId, bool AddedNew, TransferJobStatus 
 
 public sealed record TransferProgress(long BytesTransferred, long TotalBytes);
 
+public sealed record TransferRangeCheckpoint(long Offset, int Length);
+
 public sealed record TransferCheckpoint(
     Guid JobId,
     TransferDirection Direction,
@@ -46,7 +48,10 @@ public sealed record TransferCheckpoint(
     SharePath RemotePath,
     long TotalBytes,
     long NextOffset,
-    DateTimeOffset LastUpdatedUtc);
+    DateTimeOffset LastUpdatedUtc,
+    string? SourceVersion = null,
+    string? StagingPath = null,
+    IReadOnlyList<TransferRangeCheckpoint>? CompletedRanges = null);
 
 public sealed record TransferJobSnapshot(
     Guid JobId,

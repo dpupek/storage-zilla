@@ -99,6 +99,9 @@ public interface IRemoteEditSessionService
 }
 public interface ITransferExecutor
 {
+    // Called only after the job's execution has stopped. Pause/retry retain artifacts.
+    Task CleanupAsync(Guid jobId, TransferRequest request, CancellationToken cancellationToken) => Task.CompletedTask;
+
     Task<long> EstimateSizeAsync(TransferRequest request, CancellationToken cancellationToken);
     Task ExecuteAsync(
         Guid jobId,
@@ -119,6 +122,13 @@ public interface ICheckpointStore
     Task<TransferCheckpoint?> LoadAsync(Guid jobId, CancellationToken cancellationToken);
     Task SaveAsync(TransferCheckpoint checkpoint, CancellationToken cancellationToken);
     Task DeleteAsync(Guid jobId, CancellationToken cancellationToken);
+}
+
+public interface ITransferJobStore
+{
+    IReadOnlyList<TransferJobSnapshot> Load();
+    void Save(TransferJobSnapshot snapshot);
+    void Delete(Guid jobId);
 }
 
 public interface ITransferQueueService
@@ -189,5 +199,3 @@ public interface IUserHelpContentService
     IReadOnlyList<HelpTopic> GetTopics();
     Task<HelpDocument> LoadTopicAsync(string topicId, CancellationToken cancellationToken);
 }
-
-
