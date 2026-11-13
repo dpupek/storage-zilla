@@ -14,6 +14,8 @@ Recommended roles for Blob Containers:
 - `Storage Blob Data Contributor`
 
 ## First Run
+Install the application first using the [MSIX installation and certificate-trust guide](msix-installation.md). It also explains switching from an existing MSI installation.
+
 1. Launch Storage Zilla.
 2. Select `File -> Sign In`.
 3. Complete interactive Azure login.
@@ -47,3 +49,4 @@ Open `Tools -> Settings` and configure:
 ## Profile Behavior
 - `File -> Save Profile` stores current paths, selected remote root kind, and settings.
 - Profile settings are restored on next launch when possible.
+- Signed-out local browsing and settings saves preserve the last saved remote selection for the next sign-in. For the affected older beta, see the [installation guide's known limitation](msix-installation.md#switch-from-msi).

@@ -1893,13 +1893,16 @@ public sealed class MainWindowAndViewModelUiTests
         #endregion
     }
 
-    [Fact]
-    public async Task MainViewModel_SignIn_LegacyProfileWithoutRootKind_PrefersFileShareWhenNamesOverlap()
+    [Theory]
+    [InlineData(null, RemoteRootKind.FileShare)]
+    [InlineData(RemoteRootKind.FileShare, RemoteRootKind.FileShare)]
+    [InlineData(RemoteRootKind.BlobContainer, RemoteRootKind.BlobContainer)]
+    public async Task MainViewModel_SignIn_RestoresSavedRootKindFromWritableProfile(RemoteRootKind? savedKind, RemoteRootKind expectedKind)
     {
         #region Arrange
         var queue = new SpyTransferQueueService();
         var defaultLocalPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var profileStore = new ReadOnlyConnectionProfileStore(
+        var profileStore = new InMemoryConnectionProfileStore(
             new ConnectionProfile(
                 SubscriptionId: "sub",
                 StorageAccountName: "storage",
@@ -1916,7 +1919,7 @@ public sealed class MainWindowAndViewModelUiTests
                 LocalGridLayout: null,
                 RemoteGridLayout: null,
                 UpdateChannel: UpdateChannel.Stable,
-                RemoteRootKind: null));
+                RemoteRootKind: savedKind));
 
         var viewModel = CreateViewModelWithDependencies(
             new StubAuthenticationService(),
@@ -1947,8 +1950,229 @@ public sealed class MainWindowAndViewModelUiTests
         #region Assert
         var selected = Assert.IsType<FileShareItem>(viewModel.SelectedFileShare);
         Assert.Equal("shared-root", selected.Name);
-        Assert.Equal(RemoteRootKind.FileShare, selected.Kind);
+        Assert.Equal(expectedKind, selected.Kind);
+        Assert.Equal("sub", viewModel.SelectedSubscription?.Id);
+        Assert.Equal("storage", viewModel.SelectedStorageAccount?.Name);
+        Assert.Equal(expectedKind, (await profileStore.LoadAsync(CancellationToken.None)).RemoteRootKind);
         #endregion
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(RemoteRootKind.FileShare)]
+    [InlineData(RemoteRootKind.BlobContainer)]
+    public async Task MainViewModel_SignedOutStartup_PreservesSavedRemoteSelection(RemoteRootKind? kind)
+    {
+        #region Arrange
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare", RemoteRootKind = kind
+        };
+        var store = new InMemoryConnectionProfileStore(saved);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(saved, await store.LoadAsync(CancellationToken.None));
+        Assert.Equal(0, store.SaveCount);
+        #endregion
+
+        #region Act
+        var viewModel = CreateProfileTestViewModel(store);
+        #endregion
+
+        #region Assert
+        Assert.Equal("Not signed in", viewModel.LoginStatus);
+        Assert.Null(viewModel.SelectedSubscription);
+        Assert.Null(viewModel.SelectedStorageAccount);
+        Assert.Null(viewModel.SelectedFileShare);
+        Assert.True(store.SaveCount > 0); // Local browsing persisted its path through the real startup flow.
+        AssertRemoteSelection(saved, await store.LoadAsync(CancellationToken.None));
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignedOutLocalNavigation_PreservesSavedRemoteSelection()
+    {
+        #region Arrange
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare", RemoteRootKind = RemoteRootKind.BlobContainer
+        };
+        var store = new InMemoryConnectionProfileStore(saved);
+        var viewModel = CreateProfileTestViewModel(store);
+        var destination = Path.Combine(saved.LocalPath, "profile-regression");
+        viewModel.LocalPath = destination;
+        #endregion
+
+        #region Initial Assert
+        Assert.Null(viewModel.SelectedSubscription);
+        Assert.NotEqual(destination, (await store.LoadAsync(CancellationToken.None)).LocalPath);
+        #endregion
+
+        #region Act
+        await viewModel.LoadLocalDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        var persisted = await store.LoadAsync(CancellationToken.None);
+        Assert.Equal(destination, persisted.LocalPath);
+        AssertRemoteSelection(saved, persisted);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignedOutSettingsChange_PreservesSavedRemoteSelection()
+    {
+        #region Arrange
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare", RemoteRootKind = RemoteRootKind.BlobContainer
+        };
+        var store = new InMemoryConnectionProfileStore(saved);
+        var viewModel = CreateProfileTestViewModel(store);
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal(4, viewModel.TransferMaxConcurrency);
+        Assert.Null(viewModel.SelectedSubscription);
+        #endregion
+
+        #region Act
+        viewModel.TransferMaxConcurrency = 7;
+        #endregion
+
+        #region Assert
+        var persisted = await store.LoadAsync(CancellationToken.None);
+        Assert.Equal(7, persisted.TransferMaxConcurrency);
+        AssertRemoteSelection(saved, persisted);
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignIn_RestoresNonDefaultSelectionsAfterStartup()
+    {
+        #region Arrange
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare", RemoteRootKind = RemoteRootKind.FileShare
+        };
+        var store = new InMemoryConnectionProfileStore(saved);
+        var viewModel = CreateProfileTestViewModel(store);
+        #endregion
+
+        #region Initial Assert
+        Assert.Null(viewModel.SelectedSubscription);
+        Assert.Empty(viewModel.Subscriptions);
+        #endregion
+
+        #region Act
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        Assert.Equal("sub-z", viewModel.SelectedSubscription?.Id);
+        Assert.Equal("zaccount", viewModel.SelectedStorageAccount?.Name);
+        Assert.Equal("zshare", viewModel.SelectedFileShare?.Name);
+        AssertRemoteSelection(saved, await store.LoadAsync(CancellationToken.None));
+        #endregion
+    }
+
+    [Fact]
+    public async Task MainViewModel_SignIn_WaitsForInitialProfileLoadWithoutOverwritingDefaults()
+    {
+        #region Arrange
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare",
+            RemoteRootKind = RemoteRootKind.FileShare, TransferMaxConcurrency = 7
+        };
+        var store = new InMemoryConnectionProfileStore(saved, gate.Task);
+        var auth = new StubAuthenticationService();
+        var updates = new StubAppUpdateService(new UpdateCheckResult("1.0.0", "1.0.0", false, null, "Up to date.", null));
+        updates.SetChannel(UpdateChannel.Beta); // Constructor property notification must not save unloaded defaults.
+        var viewModel = CreateProfileTestViewModel(store, auth, updates);
+        #endregion
+
+        #region Initial Assert
+        Assert.False(gate.Task.IsCompleted);
+        Assert.Null(viewModel.SelectedSubscription);
+        #endregion
+
+        #region Act
+        var signIn = viewModel.SignInCommand.ExecuteAsync(null);
+        var signInCallsBeforeLoad = auth.SignInCount;
+        var savesBeforeLoad = store.SaveCount;
+        gate.SetResult();
+        await signIn.WaitAsync(TimeSpan.FromSeconds(5));
+        #endregion
+
+        #region Assert
+        Assert.Equal(0, signInCallsBeforeLoad);
+        Assert.Equal(0, savesBeforeLoad);
+        Assert.Equal(1, auth.SignInCount);
+        Assert.Equal(7, viewModel.TransferMaxConcurrency);
+        Assert.Equal(UpdateChannel.Stable, viewModel.UpdateChannel);
+        Assert.Equal("sub-z", viewModel.SelectedSubscription?.Id);
+        Assert.Equal("zaccount", viewModel.SelectedStorageAccount?.Name);
+        Assert.Equal("zshare", viewModel.SelectedFileShare?.Name);
+        AssertRemoteSelection(saved, await store.LoadAsync(CancellationToken.None));
+        #endregion
+    }
+
+    private static MainViewModel CreateProfileTestViewModel(IConnectionProfileStore store,
+        IAuthenticationService? authentication = null, IAppUpdateService? updates = null) =>
+        CreateViewModelWithDependencies(
+            authentication ?? new StubAuthenticationService(), new UnsortedDiscoveryService(), null,
+            new StubLocalBrowserService(), new StubAzureBrowserService(),
+            new StubLocalFileOperationsService(), new StubRemoteFileOperationsService(),
+            new StubTransferConflictProbeService(), new StubConflictResolutionPromptService(ConflictPromptAction.Skip, false, true),
+            new SpyTransferQueueService(), new StubMirrorPlannerService(), new StubMirrorExecutionService(), store,
+            new StubRemoteCapabilityService(), new StubRemoteActionPolicyService(), appUpdateService: updates);
+
+    [Fact]
+    public async Task MainViewModel_LocalSave_WithNewSubscriptionAndEmptyChildren_DoesNotReuseSavedAccountOrRoot()
+    {
+        #region Arrange
+        var saved = ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) with
+        {
+            SubscriptionId = "sub-z", StorageAccountName = "zaccount", FileShareName = "zshare", RemoteRootKind = RemoteRootKind.FileShare
+        };
+        var store = new InMemoryConnectionProfileStore(saved);
+        var viewModel = CreateProfileTestViewModel(store);
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        viewModel.SelectedSubscription = viewModel.Subscriptions.Single(x => x.Id == "sub-a");
+        await WaitUntilAsync(() => !viewModel.IsRemoteLoading, TimeSpan.FromSeconds(5));
+        viewModel.SelectedStorageAccount = null;
+        viewModel.SelectedFileShare = null;
+        #endregion
+
+        #region Initial Assert
+        Assert.Equal("sub-a", viewModel.SelectedSubscription.Id);
+        Assert.NotNull((await store.LoadAsync(CancellationToken.None)).StorageAccountName);
+        Assert.Null(viewModel.SelectedStorageAccount);
+        Assert.Null(viewModel.SelectedFileShare);
+        #endregion
+
+        #region Act
+        await viewModel.LoadLocalDirectoryCommand.ExecuteAsync(null);
+        #endregion
+
+        #region Assert
+        var persisted = await store.LoadAsync(CancellationToken.None);
+        Assert.Equal("sub-a", persisted.SubscriptionId);
+        Assert.Null(persisted.StorageAccountName);
+        Assert.Null(persisted.FileShareName);
+        Assert.Null(persisted.RemoteRootKind);
+        #endregion
+    }
+
+    private static void AssertRemoteSelection(ConnectionProfile expected, ConnectionProfile actual)
+    {
+        Assert.Equal(expected.SubscriptionId, actual.SubscriptionId);
+        Assert.Equal(expected.StorageAccountName, actual.StorageAccountName);
+        Assert.Equal(expected.FileShareName, actual.FileShareName);
+        Assert.Equal(expected.RemoteRootKind, actual.RemoteRootKind);
     }
 
     [Fact]
@@ -2189,7 +2413,12 @@ public sealed class MainWindowAndViewModelUiTests
         }
 
         public TokenCredential GetCredential() => throw new NotSupportedException();
-        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken) => Task.FromResult(_session);
+        public int SignInCount { get; private set; }
+        public Task<LoginSession> SignInInteractiveAsync(CancellationToken cancellationToken)
+        {
+            SignInCount++;
+            return Task.FromResult(_session);
+        }
         public Task SignOutAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
@@ -2621,33 +2850,27 @@ public sealed class MainWindowAndViewModelUiTests
     private sealed class InMemoryConnectionProfileStore : IConnectionProfileStore
     {
         private ConnectionProfile _profile;
+        private readonly Task _loadGate;
+        public int SaveCount { get; private set; }
 
-        public InMemoryConnectionProfileStore(ConnectionProfile? initialProfile = null)
+        public InMemoryConnectionProfileStore(ConnectionProfile? initialProfile = null, Task? loadGate = null)
         {
             _profile = initialProfile ?? ConnectionProfile.Empty(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+            _loadGate = loadGate ?? Task.CompletedTask;
         }
 
-        public Task<ConnectionProfile> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(_profile);
+        public async Task<ConnectionProfile> LoadAsync(CancellationToken cancellationToken)
+        {
+            await _loadGate.WaitAsync(cancellationToken);
+            return _profile;
+        }
 
         public Task SaveAsync(ConnectionProfile profile, CancellationToken cancellationToken)
         {
             _profile = profile;
+            SaveCount++;
             return Task.CompletedTask;
         }
-    }
-
-    private sealed class ReadOnlyConnectionProfileStore : IConnectionProfileStore
-    {
-        private readonly ConnectionProfile _profile;
-
-        public ReadOnlyConnectionProfileStore(ConnectionProfile profile)
-        {
-            _profile = profile;
-        }
-
-        public Task<ConnectionProfile> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(_profile);
-
-        public Task SaveAsync(ConnectionProfile profile, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class StubRemoteCapabilityService : IRemoteCapabilityService

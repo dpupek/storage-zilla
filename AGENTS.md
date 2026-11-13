@@ -20,6 +20,10 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - `beta` publishes prerelease MSIX artifacts via `.github/workflows/release-beta.yml` on every push.
 - `main` publishes stable MSIX artifacts via `.github/workflows/release-prod.yml` on every push.
 - Both wrappers call `.github/workflows/release-msix-common.yml`; keep shared release logic there to stay DRY.
+- Keep installation and certificate-trust instructions in `docs/user/msix-installation.md`; update that guide whenever installer prerequisites or behavior change.
+- Future release notes must link to that guide at the release tag (not a moving branch or a workstation-local path), list the Windows MSIX identity version, and include the actual signing subject, thumbprint, and expiration.
+- Certificate instructions must explain same-release asset/hash and signer verification, administrator elevation, **Local Machine > Trusted People** even for per-user installs, reopening App Installer, MSI/MSIX coexistence restrictions, and troubleshooting. Do not recommend Current User alone, Trusted Root installation for the app signing certificate, or bypassing signature checks.
+- Validate generated release-note links and required fields when changing the notes template. Keep artifact verification, certificate trust, successful installation, and successful application startup as separate acceptance results; do not mark installer acceptance complete from a build alone.
 - Kick off beta release:
   - merge/promote changes to `beta`
   - `git push -u origin beta` (first time) or `git push origin beta`
@@ -62,6 +66,7 @@ This repository contains `Storage Zilla`, a .NET 10 WPF desktop app for Azure Fi
 - Use menu and toolbar actions for primary commands (`Sign In`, `Save Profile`, `Help`, `Settings`).
 - Maintain responsive selection flows:
   - cancel previous selection-load operations when a new selection occurs.
+- Local startup/settings saves before remote discovery must preserve the saved subscription/account/root/kind together. Test restoration with a writable profile store, including delayed initialization; do not mask persistence failures with a read-only fake.
 
 ## Error and Logging Conventions
 - Use `ErrorDialog` for unexpected failures; dialog content must be copyable.

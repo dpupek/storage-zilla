@@ -133,6 +133,8 @@ git push origin beta
 - `StorageZilla-Signing-PublicKey.cer`: public certificate for trust/import workflows.
 - `RELEASE-NOTES.md`: release metadata and trust details (subject/thumbprint/expiration).
 - `SHA256SUMS.txt` includes checksums for MSIX, MSI, ZIP, and CER assets.
+- Maintain the [MSIX installation and certificate-trust guide](../user/msix-installation.md) as the user-facing source for installation prerequisites and troubleshooting. Future release notes link to the guide at the release tag and list the Windows package identity version separately from the release version.
+- When updating the notes template, generate sample notes and verify the guide link, version, signing details, and Local Machine / Trusted People instructions. The build's CurrentUser / My store holds the signing key; it is not the installation trust store for end-user machines.
 
 ## Logging
 - Serilog file sink is enabled.
