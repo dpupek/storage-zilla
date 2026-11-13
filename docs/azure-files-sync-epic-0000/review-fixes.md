@@ -67,12 +67,33 @@
 - Closed the actual WPF process during download. Shutdown persisted the job as paused at 37,748,736 bytes (56.25%); the sentinel was unchanged. Reopened the process, verified the paused queue row and retained checkpoint, signed in, and explicitly resumed it.
 - The resumed job completed at 67,108,864 bytes. Destination SHA-256 matched the source (`795035284A13256696874246DEC8D965888F35E647AA508ED98A4FD6DD7F058A`), and no partial file remained.
 - Cancellation cleanup passed after pausing a subsequent download at 20,971,520 bytes (31.25%): the UI showed Canceled, the checkpoint and partial file were removed, and the completed destination remained unchanged. Clearing completed/canceled jobs removed all three test queue records while preserving that destination.
-- Active-row selection was lost on progress refresh during attempts to cancel a running job. This is existing behavior: the baseline `ReloadQueueSnapshot` also clears and recreates every row. The live cancellation result above covers a paused partial download; active-worker cancellation remains covered by the deterministic integration regressions. Preserve row identity/selection in a separate UI follow-up.
+- Active-row selection was lost on progress refresh during attempts to cancel a running job. This is existing behavior: the baseline `RefreshQueueItemsFromSnapshot` also clears and recreates every row. The live cancellation result above covers a paused partial download; active-worker cancellation remains covered by the deterministic integration regressions. Preserve row identity/selection in a separate UI follow-up.
 - Deleted the unique remote payload and directory; Azure directory existence readback returned `false`. Restored the original connection profile and transfer settings. Evidence remains under `.tmp/desktop-validation-3aef8969dda24e77848dcf52c1401cc9/` (`restart-evidence.json`, `resume-evidence.json`, `cancel-evidence.json`, `purge-evidence.json`).
 
 ### Next acceptance and release steps
 - [x] Exercise actual WPF close/reopen and explicit resume, plus paused-download cancellation, purge cleanup, and destination preservation.
 - [x] Complete code and secret scans (with the parser limitation above), push the branch, and open a PR targeting `dev`.
 - [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed restore, NuGet audit, Release build, and tests for implementation commit `74e7b3d`.
-- [ ] Promote accepted changes to `beta` and smoke-test the generated MSI/MSIX install and upgrade paths.
+- [x] Merge PR #19 into `dev` and promote commit `717e204` to `beta`; final PR CI, beta sync guard, and beta release workflow passed.
+- [x] Verify the generated MSI upgrade from installed `1.0.23.0` to `1.0.60.0`.
+- [ ] Correct the MSIX version and missing checksum artifact, rebuild beta, and validate MSIX install/upgrade behavior.
 - [ ] Promote the validated beta to `main` through the documented release process.
+
+### Installer acceptance: 2026-09-09 (America/Chicago)
+- [Beta release v1.0.60-beta.39](https://github.com/dpupek/storage-zilla/releases/tag/v1.0.60-beta.39), commit `717e204b53672d9daae3996bce4b075601a8b44d`, built successfully in [run 34434504025](https://github.com/dpupek/storage-zilla/actions/runs/34434504025). All five downloaded assets matched GitHub's SHA-256 digests.
+- MSI upgrade completed successfully with Windows Installer status `0` and no fatal action failure. The log detected and migrated the existing product; registry readback shows `1.0.60.0`, and the previous product registration is absent. Installed desktop product version is `1.0.60+717e204b53`.
+- The connection profile was byte-for-byte unchanged after upgrade. The Start Menu shortcut targets the installed executable. Starting that executable produced a responding process with the Storage Zilla main-window title. Computer Use blocked control of `msiexec.exe`, so the user completed setup; subsequent visual app inspection was blocked by `GetCursorPos failed: Access is denied. (0x80070005)` after target refresh/retry. A full post-upgrade visual walkthrough is not claimed.
+- MSIX acceptance failed artifact validation: the actual package identity remains `1.0.2.0`, although the workflow computed `1.0.60.10000`. The embedded desktop DLL is current (`1.0.60+717e204b53`). The workflow passes `AppxPackageVersion` but leaves the source manifest version unchanged; write the computed identity version into the manifest and verify the built package before publishing.
+- `SHA256SUMS.txt` is missing from the release. The workflow writes it beside the MSIX in a nested package directory, but publishes a path at the parent `msix` directory. The release log confirms that upload pattern matched no files. Publish the exact generated path and fail when a required artifact is absent.
+- The MSIX signer matches the manifest publisher, but Windows reports an untrusted root certificate on this machine. No certificate trust settings were changed, and no MSIX installation was attempted alongside the installed MSI.
+- Local evidence is retained under `.tmp/beta-installer-validation/`: `artifact-validation.json`, `msi-installed-evidence.json`, `msi-upgrade.log`, and `release-build.log`. Stable promotion remains pending.
+
+### Packaging remediation: 2026-11-13
+- Baseline and scope: correct the two release defects recorded above in the shared workflow used by beta and stable releases; retain the existing signing identity and installer behavior.
+- [x] Stamp the computed MSIX identity version into the source manifest before packaging.
+- [x] Reject missing/multiple MSIX artifacts, an incorrect built identity version, or a publisher/name mismatch before release publication.
+- [x] Publish the checksum step's exact output path and fail on unmatched required release assets.
+- [x] Validate YAML and execute the actual changed PowerShell blocks with fixtures: stale version, incorrect publisher, missing/multiple packages, valid package, and nested checksum output all behaved as expected.
+- [ ] Merge through `dev`, rebuild beta, and verify the downloaded manifest and all published checksums.
+- [ ] Test MSIX installation and startup, recording certificate-trust or installation-mode prerequisites explicitly.
+- Fixture validation evidence: `.tmp/check-packaging-workflow.py` and `.tmp/packaging-check-14jntmxr/`. No application code or dependencies changed.

@@ -153,7 +153,9 @@ Implementation and automated validation are complete: 116 offline tests passed (
 - [x] Verify actual desktop close/reopen and resume, paused-download cancel/purge cleanup, and existing-destination preservation. SHA-256 matched for the 64 MiB payload; the remote test directory was removed and original settings restored.
 - [x] Complete Semgrep/Gitleaks scans and open [PR #19](https://github.com/dpupek/storage-zilla/pull/19) against `dev`. No findings; Semgrep has primary-constructor parsing warnings in two test files, recorded in the handoff.
 - [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed on implementation commit `74e7b3d`.
-- [ ] Promote to `beta` and smoke-test generated MSI/MSIX install and upgrade behavior.
+- [x] Merge PR #19 into `dev` and promote to `beta`; final PR CI, beta sync guard, and release build passed on `717e204`.
+- [x] Validate beta MSI upgrade from `1.0.23.0` to `1.0.60.0`: installer status 0, prior product removed, profile preserved, shortcut correct, and installed app process responding.
+- [ ] Correct beta MSIX identity version (`1.0.2.0` instead of computed `1.0.60.10000`) and missing `SHA256SUMS.txt`, then rebuild and validate MSIX install/upgrade. Signing trust and the remaining post-upgrade visual walkthrough are also open; see [installer acceptance](review-fixes.md#installer-acceptance-2026-09-09-americachicago).
 - [ ] Promote validated beta changes to `main` for stable release.
 
 Follow-up from desktop acceptance: preserve queue row identity and selection during progress refresh. The baseline also recreates all rows; current live cancellation validation used Pause All before selecting and canceling the partial job.
