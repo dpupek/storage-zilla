@@ -53,7 +53,7 @@ On a managed workstation, ask your administrator to deploy the approved certific
 4. Find the existing Storage Zilla MSI installation, select **Uninstall**, and complete setup/elevation prompts. Confirm it is removed before continuing.
 5. Install the MSIX below. Check settings and paths before resuming work; migration of MSI settings into the packaged app is not an accepted/tested guarantee.
 
-Known limitation in beta `v1.0.62-beta.40`: signed-out startup clears saved subscription, storage account, and remote-root selections. The source fix has regression coverage and is awaiting a new beta release. When using that older beta, keep the backup and expect to reselect the remote connection after signing in. Local path/settings and checkpoint files were preserved in the installer test.
+Older beta `v1.0.62-beta.40` clears saved subscription, storage account, and remote-root selections during signed-out startup. The profile-persistence fix included with this guide preserves those selections. When using that older beta, keep the backup and expect to reselect the remote connection after signing in. Local path/settings and checkpoint files were preserved in the installer test.
 
 ## Install or update
 
