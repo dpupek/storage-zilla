@@ -5,6 +5,7 @@ Storage Zilla is a Windows desktop app for browsing and transferring Azure Stora
 Use this guide for setup, daily transfer workflows, and queue operations.
 
 ## Guide Contents
+- [MSIX Installation and Certificate Trust](msix-installation.md)
 - [Getting Started](getting-started.md)
 - [UI Tour](ui-tour.md)
 - [Transfers](transfers.md)

@@ -55,6 +55,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IMirrorPlannerService _mirrorPlanner;
     private readonly IMirrorExecutionService _mirrorExecution;
     private readonly IConnectionProfileStore _connectionProfileStore;
+    private readonly Task _profileInitializationTask;
     private readonly IRemoteCapabilityService _remoteCapabilityService;
     private readonly IRemoteActionPolicyService _remoteActionPolicyService;
     private readonly IAppUpdateService _appUpdateService;
@@ -62,7 +63,7 @@ public partial class MainViewModel : ObservableObject
     private readonly TimeSpan _remoteOpenDirectoryTimeout;
 
     private MirrorPlan? _lastMirrorPlan;
-    private bool _isRestoringProfile;
+    private bool _isRestoringProfile = true;
     private bool _suppressSelectionHandlers;
     private bool _isUpdatingRemoteSelection;
     private DateTimeOffset _lastLocalRefreshUtc = DateTimeOffset.MinValue;
@@ -369,7 +370,7 @@ public partial class MainViewModel : ObservableObject
         QueueItemsView.Filter = ShouldIncludeQueueItem;
         _transferQueueService.JobUpdated += OnJobUpdated;
         RefreshQueueItemsFromSnapshot();
-        _ = LoadLocalProfileDefaultsAsync();
+        _profileInitializationTask = LoadLocalProfileDefaultsAsync();
     }
 
     [RelayCommand]
@@ -377,6 +378,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
+            await _profileInitializationTask;
             Log.Information("User initiated interactive sign-in.");
             var session = await _authenticationService.SignInInteractiveAsync(CancellationToken.None);
             LoginStatus = session.UsedFallback
@@ -2268,10 +2270,10 @@ public partial class MainViewModel : ObservableObject
 
     private async Task LoadLocalProfileDefaultsAsync()
     {
-        var profile = await _connectionProfileStore.LoadAsync(CancellationToken.None);
         _isRestoringProfile = true;
         try
         {
+            var profile = await _connectionProfileStore.LoadAsync(CancellationToken.None);
             LocalPath = NormalizeLocalPath(profile.LocalPath);
             RemotePath = NormalizeRemotePathDisplay(profile.RemotePath);
             _lastSuccessfulRemotePath = RemotePath;
@@ -2356,10 +2358,24 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        // Before discovery (or after sign-out), local browsing/settings must not erase
+        // the saved remote selection. Keep the selection together, never mixing a saved
+        // account/root with a newly selected subscription whose children are empty.
+        var savedRemoteSelection = SelectedSubscription is null
+            ? await _connectionProfileStore.LoadAsync(CancellationToken.None)
+            : null;
+        if (_isRestoringProfile)
+        {
+            return;
+        }
+        if (SelectedSubscription is not null)
+        {
+            savedRemoteSelection = null;
+        }
         var profile = new ConnectionProfile(
-            SelectedSubscription?.Id,
-            SelectedStorageAccount?.Name,
-            SelectedFileShare?.Name,
+            savedRemoteSelection is not null ? savedRemoteSelection.SubscriptionId : SelectedSubscription?.Id,
+            savedRemoteSelection is not null ? savedRemoteSelection.StorageAccountName : SelectedStorageAccount?.Name,
+            savedRemoteSelection is not null ? savedRemoteSelection.FileShareName : SelectedFileShare?.Name,
             NormalizeLocalPath(LocalPath),
             RemotePath,
             IncludeDeletes,
@@ -2372,7 +2388,7 @@ public partial class MainViewModel : ObservableObject
             LocalGridLayout,
             RemoteGridLayout,
             UpdateChannel,
-            SelectedFileShare?.Kind);
+            savedRemoteSelection is not null ? savedRemoteSelection.RemoteRootKind : SelectedFileShare?.Kind);
 
         await _connectionProfileStore.SaveAsync(profile, CancellationToken.None);
     }

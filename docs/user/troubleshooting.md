@@ -1,5 +1,8 @@
 # Troubleshooting
 
+## MSIX Publisher Certificate Could Not Be Verified
+If App Installer shows **Publisher: Unknown**, disables **Install**, or reports `0x800B010A` / `0x800B0109`, follow the [MSIX installation and certificate-trust guide](msix-installation.md). Verify the release assets and signer before importing the certificate into **Local Machine → Trusted People** with administrator help.
+
 ## Sign-in Works But Remote Browse Fails
 Symptom:
 - Right pane shows permission warning

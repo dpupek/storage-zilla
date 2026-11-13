@@ -155,7 +155,11 @@ Implementation and automated validation are complete: 116 offline tests passed (
 - [x] Verify hosted Windows CI for PR #19: [run 34431743134](https://github.com/dpupek/storage-zilla/actions/runs/34431743134) passed on implementation commit `74e7b3d`.
 - [x] Merge PR #19 into `dev` and promote to `beta`; final PR CI, beta sync guard, and release build passed on `717e204`.
 - [x] Validate beta MSI upgrade from `1.0.23.0` to `1.0.60.0`: installer status 0, prior product removed, profile preserved, shortcut correct, and installed app process responding.
-- [ ] Correct beta MSIX identity version (`1.0.2.0` instead of computed `1.0.60.10000`) and missing `SHA256SUMS.txt`, then rebuild and validate MSIX install/upgrade. Signing trust and the remaining post-upgrade visual walkthrough are also open; see [installer acceptance](review-fixes.md#installer-acceptance-2026-09-09-americachicago).
+- [x] Correct MSIX identity stamping and checksum publication; rebuilt beta `v1.0.62-beta.40` declares `1.0.62.10000`, includes `SHA256SUMS.txt`, and passes all downloaded hash checks.
+- [x] Complete MSIX installation, upgrade, and startup validation after user-established certificate trust and MSI removal: clean install `1.0.2.0`, upgrade to `1.0.62.10000`, About `1.0.62`, and close/relaunch passed. See [MSIX acceptance](review-fixes.md#msix-installation-and-upgrade-acceptance-2026-11-13).
+- [x] Fix signed-out startup/local saves clearing saved remote selections; add writable-store startup, delayed initialization, settings/navigation, sign-in restoration, and selection-change regressions. Final validation: 126 tests passed; two live definitions skipped.
+- [x] Add complete MSIX installation/trust instructions, future release-tag-specific guide links, and repository conventions; verify generated release notes and documentation links.
+- [ ] Publish a new beta containing the profile fix and installation documentation, then verify signed-out profile preservation in the installed build before stable promotion. Current published beta `v1.0.62-beta.40` predates the profile fix.
 - [ ] Promote validated beta changes to `main` for stable release.
 
 Follow-up from desktop acceptance: preserve queue row identity and selection during progress refresh. The baseline also recreates all rows; current live cancellation validation used Pause All before selecting and canceling the partial job.

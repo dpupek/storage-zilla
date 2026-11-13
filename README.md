@@ -30,6 +30,7 @@ Choose one license path:
 2. Use under commercial terms: see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL).
 
 ## Documentation
+- Installation and certificate trust: [MSIX installation guide](docs/user/msix-installation.md)
 - Developer docs: [docs/dev/README.md](docs/dev/README.md)
 - User docs: [docs/user/README.md](docs/user/README.md)
 - Epic planning docs: [docs/azure-files-sync-epic-0000](docs/azure-files-sync-epic-0000)
