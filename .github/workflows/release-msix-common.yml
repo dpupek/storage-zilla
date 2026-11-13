@@ -201,7 +201,7 @@ jobs:
           $securePassword = ConvertTo-SecureString $env:MSIX_CERT_PASSWORD -AsPlainText -Force
           Import-PfxCertificate -FilePath $env:MSIX_CERT_PATH -Password $securePassword -CertStoreLocation "Cert:\CurrentUser\My" | Out-Null
 
-      - name: Apply package publisher from secret
+      - name: Apply package version and publisher
         shell: pwsh
         env:
           MSIX_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
@@ -224,6 +224,7 @@ jobs:
           } else {
             $identity.SetAttribute("Publisher", $publisherFromSecret)
           }
+          $identity.SetAttribute("Version", "${{ steps.version.outputs.msix_version }}")
           $manifest.Save($manifestPath)
 
       - name: Build signed MSIX package
@@ -393,17 +394,37 @@ jobs:
           Set-Content -Path $notesPath -Value $lines -Encoding UTF8
           "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
 
-      - name: Resolve MSIX artifact
+      - name: Resolve and validate MSIX artifact
         id: artifact
         shell: pwsh
         run: |
-          $msix = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP "msix") -Recurse -Filter *.msix | Select-Object -First 1
-          if ($null -eq $msix) {
-            throw "No .msix artifact was produced."
+          $packages = @(Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP "msix") -Recurse -File -Filter *.msix)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one .msix artifact; found $($packages.Count)."
+          }
+          $msix = $packages[0]
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($msix.FullName)
+          try {
+            $entry = $archive.GetEntry("AppxManifest.xml")
+            if ($null -eq $entry) { throw "MSIX has no AppxManifest.xml." }
+            $reader = [System.IO.StreamReader]::new($entry.Open())
+            try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            $identity = $manifest.Package.Identity
+            $expectedVersion = "${{ steps.version.outputs.msix_version }}"
+            if ($identity.Version -ne $expectedVersion) {
+              throw "MSIX identity version mismatch: expected '$expectedVersion', found '$($identity.Version)'."
+            }
+            if ($identity.Name -ne "StorageZilla.Desktop" -or $identity.Publisher -ne $env:MSIX_CERT_SUBJECT) {
+              throw "MSIX identity name or publisher does not match the application and signing certificate."
+            }
+            Write-Host "Validated MSIX identity: $($identity.Name) $($identity.Version) $($identity.Publisher)"
+          } finally {
+            $archive.Dispose()
           }
           "msix_path=$($msix.FullName)" >> $env:GITHUB_OUTPUT
 
       - name: Write SHA256
+        id: checksum_artifact
         shell: pwsh
         run: |
           $hashes = @(
@@ -415,10 +436,12 @@ jobs:
           $line = $hashes | ForEach-Object { "$($_.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($_.Path))" }
           $shaPath = Join-Path (Split-Path "${{ steps.artifact.outputs.msix_path }}" -Parent) "SHA256SUMS.txt"
           Set-Content -Path $shaPath -Value $line
+          "sha_path=$shaPath" >> $env:GITHUB_OUTPUT
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           prerelease: ${{ inputs.prerelease }}
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
@@ -430,4 +453,4 @@ jobs:
             ${{ steps.zip_artifact.outputs.zip_path }}
             ${{ steps.cert_artifact.outputs.cer_path }}
             ${{ steps.notes_artifact.outputs.notes_path }}
-            ${{ runner.temp }}\msix\SHA256SUMS.txt
+            ${{ steps.checksum_artifact.outputs.sha_path }}
